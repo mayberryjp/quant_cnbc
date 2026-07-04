@@ -1,0 +1,18 @@
+services:
+  quant_cnbc:
+    container_name: quant_cnbc
+    image: mayberry4477/quant_cnbc:latest
+    build: .
+    stdin_open: true
+    tty: true
+    environment:
+      - DATABASE_URL=postgresql+psycopg://quant:quant_dev_password@postgres:5432/quant
+      - API_PORT=8019
+      - CNBC_INGEST_WAKE_TIME=06:00
+      - CNBC_ARCHIVE_COLLECTION=TV-CNBC
+      - CNBC_LLM_BASE_URL=http://host.docker.internal:11434/v1
+      - CNBC_LLM_MODEL=llama3.1:8b
+      - CNBC_SENTIMENT_API_URL=http://quant_sentiment:8017/sentiment
+      - CNBC_WATCHLIST_API_URL=http://quant_signals:8016/signals
+    ports:
+      - "8019:8019"

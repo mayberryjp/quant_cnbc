@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-cnbc"
+version = "0.1.0"
+description = "CNBC transcript ingestion, LLM distillation, sentiment + watchlist producer"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.13",
+    "bottle>=0.13.0",
+    "psycopg[binary]>=3.1",
+    "SQLAlchemy>=2.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "httpx>=0.27",
+    "waitress>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "webtest>=3.0.0",
+    "respx>=0.21.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

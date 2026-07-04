@@ -1,0 +1,167 @@
+"""Pipeline orchestration: drive transcripts through the processing state machine.
+
+Fully dependency-injected so it can be unit-tested with in-memory fakes.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections import Counter
+from datetime import date, datetime, timezone
+
+from app.models.domain import (
+    Distillation,
+    DeliveryStatus,
+    Transcript,
+    TranscriptStatus,
+    WatchlistStatus,
+)
+from app.services import distiller, entity_pass, sentiment_pass
+from app.services.transcript_fetcher import discover_new_items, fetch_transcript
+
+log = logging.getLogger("quant_cnbc.pipeline")
+
+
+class Pipeline:
+    def __init__(
+        self, *, transcript_repo, distillation_repo, sentiment_repo, entity_repo, run_repo,
+        archive_client, llm_client, sentiment_api, watchlist_api,
+        model: str, distill_prompt_version: str, sentiment_prompt_version: str,
+        entity_prompt_version: str, collection: str = "TV-CNBC", lookback_days: int = 1,
+        overlap_hours: int = 24, allowlist: list[str] | None = None, max_attempts: int = 5,
+    ) -> None:
+        self.transcripts = transcript_repo
+        self.distillations = distillation_repo
+        self.sentiments = sentiment_repo
+        self.entities = entity_repo
+        self.runs = run_repo
+        self.archive = archive_client
+        self.llm = llm_client
+        self.sentiment_api = sentiment_api
+        self.watchlist_api = watchlist_api
+        self.model = model
+        self.distill_pv = distill_prompt_version
+        self.sentiment_pv = sentiment_prompt_version
+        self.entity_pv = entity_prompt_version
+        self.collection = collection
+        self.lookback_days = lookback_days
+        self.overlap_hours = overlap_hours
+        self.allowlist = allowlist or []
+        self.max_attempts = max_attempts
+
+    # -- discovery ---------------------------------------------------------
+    def discover(self) -> int:
+        return discover_new_items(
+            self.archive, self.transcripts, self.runs,
+            collection=self.collection, lookback_days=self.lookback_days,
+            overlap_hours=self.overlap_hours, allowlist=self.allowlist,
+        )
+
+    # -- per-item processing ----------------------------------------------
+    def process_one(self, transcript: Transcript) -> Counter:
+        c: Counter = Counter()
+        try:
+            status = transcript.status
+
+            if status == TranscriptStatus.discovered:
+                if not fetch_transcript(self.archive, self.transcripts, transcript):
+                    c["failures"] += 1
+                    return c
+                transcript = self.transcripts.get_by_id(transcript.id)
+                status = TranscriptStatus.fetched
+                c["transcripts_fetched"] += 1
+
+            if status == TranscriptStatus.fetched:
+                out, usage = distiller.distill(self.llm, transcript.raw_text or "")
+                self.distillations.upsert(Distillation(
+                    transcript_id=transcript.id, model=self.model,
+                    prompt_version=self.distill_pv, summary=out.summary,
+                    key_topics=out.key_topics,
+                    segments=[s.model_dump() for s in out.segments],
+                    token_usage=usage or None,
+                ))
+                self.transcripts.set_status(transcript.id, TranscriptStatus.distilled)
+                self.transcripts.touch_stage(transcript.id, "distilled")
+                status = TranscriptStatus.distilled
+                c["distilled"] += 1
+
+            if status == TranscriptStatus.distilled:
+                current = self.distillations.get_current(transcript.id)
+                summary = current.summary if current else (transcript.raw_text or "")
+                c.update(self._deliver_sentiment(transcript, summary))
+                c.update(self._deliver_entities(transcript, summary))
+                self.transcripts.touch_stage(transcript.id, "delivered")
+                self.transcripts.set_status(transcript.id, TranscriptStatus.done)
+            return c
+        except Exception as exc:  # isolate per-item failures
+            log.exception("processing failed for %s", transcript.archive_identifier)
+            self.transcripts.set_status(
+                transcript.id, TranscriptStatus.failed,
+                last_error=str(exc)[:500], bump_attempts=True,
+            )
+            c["failures"] += 1
+            return c
+
+    def _deliver_sentiment(self, transcript: Transcript, summary: str) -> Counter:
+        c: Counter = Counter()
+        out, _ = sentiment_pass.extract_sentiment(self.llm, summary)
+        for row in sentiment_pass.build_rows(
+            transcript, out, model=self.model, prompt_version=self.sentiment_pv
+        ):
+            row_id = self.sentiments.insert(row)
+            status, sid = self.sentiment_api.deliver(row, transcript)
+            delivered_at = datetime.now(timezone.utc) if status in (
+                DeliveryStatus.sent, DeliveryStatus.duplicate
+            ) else None
+            self.sentiments.set_delivery(row_id, status, sentiment_id=sid, delivered_at=delivered_at)
+            if status in (DeliveryStatus.sent, DeliveryStatus.duplicate):
+                c["sentiments_sent"] += 1
+        return c
+
+    def _deliver_entities(self, transcript: Transcript, summary: str) -> Counter:
+        c: Counter = Counter()
+        out, _ = entity_pass.extract_entities(self.llm, summary)
+        for row in entity_pass.build_rows(
+            transcript, out, model=self.model, prompt_version=self.entity_pv
+        ):
+            row_id = self.entities.insert(row)
+            if row.ticker:
+                status = self.watchlist_api.submit(row, transcript)
+                submitted_at = datetime.now(timezone.utc) if status in (
+                    WatchlistStatus.submitted, WatchlistStatus.duplicate
+                ) else None
+                self.entities.set_watchlist(row_id, status, submitted_at=submitted_at)
+                if status in (WatchlistStatus.submitted, WatchlistStatus.duplicate):
+                    c["entities_submitted"] += 1
+            else:
+                self.entities.set_watchlist(row_id, WatchlistStatus.unresolved)
+        return c
+
+    # -- run ---------------------------------------------------------------
+    def run(self, run_date: date | None = None, *, limit: int = 200) -> Counter:
+        run_date = run_date or datetime.now(timezone.utc).date()
+        self.runs.start_run(run_date)
+        totals: Counter = Counter()
+        try:
+            self.discover()
+            for t in self.transcripts.list_actionable(limit=limit, max_attempts=self.max_attempts):
+                c = self.process_one(t)
+                totals.update(c)
+                self.runs.add_counters(run_date, **c)
+            status = "partial" if totals.get("failures") else "success"
+        except Exception:
+            log.exception("run failed")
+            status = "failed"
+        self.runs.complete_run(run_date, status)
+        return totals
+
+    # -- reprocessing (slice 9) -------------------------------------------
+    def reprocess(self, transcript: Transcript, run_date: date | None = None) -> Counter:
+        """Recalculate a saved transcript from 'fetched' through the passes."""
+        self.transcripts.reset_for_reprocess(transcript.id)
+        refreshed = self.transcripts.get_by_id(transcript.id)
+        c = self.process_one(refreshed)
+        c["reprocessed"] += 1
+        if run_date is not None:
+            self.runs.add_counters(run_date, **c)
+        return c
