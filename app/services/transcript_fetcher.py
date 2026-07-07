@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from app.services.archive_client import (
@@ -14,9 +15,17 @@ from app.services.archive_client import (
 
 log = logging.getLogger("quant_cnbc.fetcher")
 
+_SEPARATORS = re.compile(r"[\s_-]+")
+
 
 def _norm(token: str) -> str:
-    return token.lower().replace("-", "_").strip()
+    """Normalize a show name/slug for allow-list matching.
+
+    Spaces, hyphens and underscores are treated as equivalent separators so a
+    human-entered name (``"Squawk Box"``), a hyphen slug (``"squawk-box"``) and
+    the archive identifier token (``"Squawk_Box"``) all compare equal.
+    """
+    return _SEPARATORS.sub("_", token.strip().lower()).strip("_")
 
 
 def discover_new_items(

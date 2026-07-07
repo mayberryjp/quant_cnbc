@@ -127,6 +127,29 @@ class TestDiscoveryAndFetch:
         assert "CNBC_20260702_220000_Mad_Money" in trepo.items
 
     @respx.mock
+    def test_discover_allowlist_matches_display_names(self):
+        # Allow-list given as human show names (with spaces); archive slugs use
+        # underscores. They must normalize equal, "Squawk Box" must not match the
+        # distinct "Squawk Box Europe", and entertainment reruns are excluded.
+        respx.get("https://archive.org/advancedsearch.php").mock(
+            return_value=httpx.Response(200, json={"response": {"docs": [
+                {"identifier": "CNBC_20260702_100000_Squawk_Box", "addeddate": "2026-07-02T10:30:00Z"},
+                {"identifier": "CNBC_20260702_080000_Squawk_Box_Europe", "addeddate": "2026-07-02T08:30:00Z"},
+                {"identifier": "CNBC_20260702_030000_The_Profit", "addeddate": "2026-07-02T03:30:00Z"},
+            ]}})
+        )
+        client = ArchiveClient(rate_limit=0)
+        trepo, rrepo = FakeTranscriptRepo(), FakeRunRepo()
+        n = discover_new_items(
+            client, trepo, rrepo, rows=100,
+            allowlist=["Squawk Box", "Squawk Box Europe"],
+        )
+        assert n == 2
+        assert "CNBC_20260702_100000_Squawk_Box" in trepo.items
+        assert "CNBC_20260702_080000_Squawk_Box_Europe" in trepo.items
+        assert "CNBC_20260702_030000_The_Profit" not in trepo.items
+
+    @respx.mock
     def test_fetch_transcript_downloads_and_normalizes(self):
         aid = "CNBC_20260702_220000_Mad_Money"
         respx.get(f"https://archive.org/metadata/{aid}").mock(

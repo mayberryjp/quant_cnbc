@@ -33,7 +33,13 @@ class Settings(BaseSettings):
     ingest_wake_time: str = "06:00"          # local HH:MM to wake and process prior day
     ingest_interval: int = 86400             # seconds between runs (fallback cadence)
     ingest_lookback_days: int = 1
-    shows: str = ""                          # comma-separated allow-list; empty = all
+    # Comma-separated allow-list of show names/slugs; empty = whole collection.
+    # Defaults to the CNBC market-focused programmes so CNBC Prime entertainment
+    # reruns (e.g. The Profit, Shark Tank, American Greed) are excluded.
+    shows: str = (
+        "The Exchange,Squawk Box Europe,Mad Money,Fast Money,"
+        "Closing Bell,Power Lunch,Squawk on the Street,Squawk Box"
+    )
 
     # --- archive.org ---
     archive_base_url: str = "https://archive.org"
