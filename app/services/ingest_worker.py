@@ -130,6 +130,10 @@ def run_worker(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="quant_cnbc.ingest_worker")
     parser.add_argument("--wake-time", default=settings.ingest_wake_time)
     parser.add_argument("--interval", type=int, default=settings.ingest_interval)
+    parser.add_argument(
+        "--interval-hours", type=float, default=settings.ingest_interval_hours,
+        help="if > 0, run every N hours instead of once daily at --wake-time",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--date", type=lambda s: date.fromisoformat(s), default=None)
     parser.add_argument("--reprocess", default=None, metavar="ARCHIVE_IDENTIFIER")
@@ -194,14 +198,21 @@ def run_worker(argv: list[str] | None = None) -> None:
         logger.info("single pass complete: %s", dict(totals))
         return
 
-    logger.info("ingest worker starting (wake-time=%s)", args.wake_time)
+    interval_mode = args.interval_hours and args.interval_hours > 0
+    if interval_mode:
+        logger.info("ingest worker starting (interval=%gh)", args.interval_hours)
+    else:
+        logger.info("ingest worker starting (wake-time=%s)", args.wake_time)
     while True:
         try:
             totals = pipeline.run(args.date)
             logger.info("run complete: %s", dict(totals))
         except Exception:
-            logger.exception("run cycle failed - will retry next wake")
-        time.sleep(seconds_until_wake(args.wake_time))
+            logger.exception("run cycle failed - will retry next cycle")
+        if interval_mode:
+            time.sleep(args.interval_hours * 3600)
+        else:
+            time.sleep(seconds_until_wake(args.wake_time))
 
 
 if __name__ == "__main__":

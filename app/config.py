@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # --- Ingestion schedule ---
     ingest_wake_time: str = "06:00"          # local HH:MM to wake and process prior day
     ingest_interval: int = 86400             # seconds between runs (fallback cadence)
+    # If > 0, the worker runs every N hours (interval mode) instead of once daily
+    # at ingest_wake_time. e.g. 4 = check for new shows every 4 hours.
+    ingest_interval_hours: float = 4
     ingest_lookback_days: int = 1
     # Comma-separated allow-list of show names/slugs; empty = whole collection.
     # Defaults to the CNBC market-focused programmes so CNBC Prime entertainment
