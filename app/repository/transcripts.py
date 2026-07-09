@@ -15,6 +15,32 @@ _COLUMNS = (
     "archive_addeddate, discovered_at, fetched_at, distilled_at, delivered_at"
 )
 
+# Derived scalar metrics for read/API queries. Computed in SQL so that the long
+# raw_text / summary bodies never leave the database, only their lengths/counts.
+_METRICS = (
+    "char_length(t.raw_text) AS raw_char_count, "
+    "d.summary_char_count, d.key_topic_count, d.segment_count, "
+    "s.sentiment_count, e.entity_count"
+)
+
+_METRIC_JOINS = (
+    " LEFT JOIN LATERAL ("
+    "   SELECT char_length(summary) AS summary_char_count, "
+    "          jsonb_array_length(key_topics) AS key_topic_count, "
+    "          jsonb_array_length(segments) AS segment_count "
+    "   FROM cnbc.distillations "
+    "   WHERE transcript_id = t.id AND is_current "
+    "   ORDER BY created_at DESC LIMIT 1"
+    " ) d ON true"
+    " LEFT JOIN LATERAL ("
+    "   SELECT count(*) AS sentiment_count FROM cnbc.sentiments WHERE transcript_id = t.id"
+    " ) s ON true"
+    " LEFT JOIN LATERAL ("
+    "   SELECT count(*) AS entity_count "
+    "   FROM cnbc.referenced_entities WHERE transcript_id = t.id"
+    " ) e ON true"
+)
+
 
 def _row_to_transcript(row: dict, *, raw_text: str | None = None) -> Transcript:
     data = dict(row)
@@ -62,7 +88,8 @@ class TranscriptRepository:
 
     def get_by_id(self, transcript_id: int) -> Transcript | None:
         sql = text(
-            f"SELECT {_COLUMNS}, raw_text FROM cnbc.transcripts WHERE id = :id"
+            f"SELECT {_COLUMNS}, raw_text, {_METRICS} "
+            f"FROM cnbc.transcripts t{_METRIC_JOINS} WHERE t.id = :id"
         )
         with self.engine.connect() as conn:
             row = conn.execute(sql, {"id": transcript_id}).mappings().first()
@@ -184,7 +211,8 @@ class TranscriptRepository:
             params["offset"] = (page - 1) * page_size
             rows = conn.execute(
                 text(
-                    f"SELECT {_COLUMNS} FROM cnbc.transcripts{where} "
+                    f"SELECT {_COLUMNS}, {_METRICS} "
+                    f"FROM cnbc.transcripts t{_METRIC_JOINS}{where} "
                     "ORDER BY broadcast_start DESC NULLS LAST LIMIT :limit OFFSET :offset"
                 ),
                 params,

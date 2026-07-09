@@ -98,6 +98,13 @@ class Transcript(BaseModel):
     fetched_at: datetime | None = None
     distilled_at: datetime | None = None
     delivered_at: datetime | None = None
+    # -- derived metrics (populated by read queries only) --
+    raw_char_count: int | None = None
+    summary_char_count: int | None = None
+    key_topic_count: int | None = None
+    segment_count: int | None = None
+    sentiment_count: int | None = None
+    entity_count: int | None = None
 
 
 class Distillation(BaseModel):
