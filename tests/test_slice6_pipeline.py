@@ -48,6 +48,19 @@ class FakeTranscriptRepo:
         self._by_id[tid].status = TranscriptStatus.fetched
         return True
 
+    def reset_full(self, tid):
+        t = self._by_id[tid]
+        t.status = TranscriptStatus.discovered
+        t.raw_text = None
+        return True
+
+    def mark_fetched(self, tid, *, raw_text, content_hash, caption_file=None):
+        t = self._by_id[tid]
+        t.raw_text = raw_text
+        t.content_hash = content_hash
+        t.caption_file = caption_file
+        t.status = TranscriptStatus.fetched
+
     def list_actionable(self, *, limit=200, max_attempts=5):
         return list(self._by_id.values())
 
@@ -187,6 +200,21 @@ class TestPipeline:
         c = p.reprocess(p.transcripts.get_by_id(t.id))
         assert c["reprocessed"] == 1
         assert p.transcripts.get_by_id(t.id).status == TranscriptStatus.done
+
+    def test_restart_refetches_and_reruns(self):
+        class FakeArchive:
+            def fetch_page_transcript(self, identifier):
+                return "fresh transcript text"
+
+        p = _pipeline()
+        p.archive = FakeArchive()
+        t = p.transcripts.add_fetched("CNBC_20260702_220000_Mad_Money", "old text")
+        p.process_one(t)
+        c = p.restart(p.transcripts.get_by_id(t.id))
+        assert c["reprocessed"] == 1
+        refreshed = p.transcripts.get_by_id(t.id)
+        assert refreshed.status == TranscriptStatus.done
+        assert refreshed.raw_text == "fresh transcript text"
 
 
 class TestWakeTiming:

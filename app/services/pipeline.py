@@ -165,3 +165,13 @@ class Pipeline:
         if run_date is not None:
             self.runs.add_counters(run_date, **c)
         return c
+
+    def restart(self, transcript: Transcript, run_date: date | None = None) -> Counter:
+        """Fully restart an item: reset to 'discovered', re-fetch, re-run all passes."""
+        self.transcripts.reset_full(transcript.id)
+        refreshed = self.transcripts.get_by_id(transcript.id)
+        c = self.process_one(refreshed)
+        c["reprocessed"] += 1
+        if run_date is not None:
+            self.runs.add_counters(run_date, **c)
+        return c

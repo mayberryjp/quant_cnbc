@@ -4,6 +4,8 @@ Usage:
     python -m app.services.ingest_worker [--wake-time HH:MM] [--interval N]
         [--once] [--date YYYY-MM-DD]
         [--reprocess <archive_identifier>]
+        [--restart <archive_identifier>]
+        [--restart-all [--show S] [--from-date D] [--to-date D]]
         [--reprocess-stale [--show S] [--from-date D] [--to-date D]]
         [--force [--show S] [--from-date D] [--to-date D]]
 """
@@ -82,6 +84,17 @@ def seconds_until_wake(wake_time: str, now: datetime | None = None) -> float:
     return (target - now).total_seconds()
 
 
+def _restart_all(pipeline: Pipeline, args) -> int:
+    """Fully restart every transcript matching the filters (re-fetch + all passes)."""
+    candidates = pipeline.transcripts.restart_candidates(
+        show=args.show, from_date=args.from_date, to_date=args.to_date,
+    )
+    for t in candidates:
+        pipeline.restart(t)
+    logger.info("restarted %d transcript(s)", len(candidates))
+    return len(candidates)
+
+
 def _reprocess_stale(pipeline: Pipeline, args) -> int:
     """Reprocess saved transcripts matching the filters.
 
@@ -116,6 +129,14 @@ def run_worker(argv: list[str] | None = None) -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--date", type=lambda s: date.fromisoformat(s), default=None)
     parser.add_argument("--reprocess", default=None, metavar="ARCHIVE_IDENTIFIER")
+    parser.add_argument(
+        "--restart", default=None, metavar="ARCHIVE_IDENTIFIER",
+        help="reset to 'discovered' and re-run the FULL pipeline (re-fetches transcript)",
+    )
+    parser.add_argument(
+        "--restart-all", action="store_true",
+        help="fully restart ALL matching transcripts (re-fetch + all passes)",
+    )
     parser.add_argument("--reprocess-stale", action="store_true")
     parser.add_argument(
         "--force", action="store_true",
@@ -134,6 +155,17 @@ def run_worker(argv: list[str] | None = None) -> None:
             logger.error("unknown archive_identifier: %s", args.reprocess)
             sys.exit(1)
         pipeline.reprocess(t)
+        return
+    if args.restart:
+        t = pipeline.transcripts.get_by_identifier(args.restart)
+        if t is None:
+            logger.error("unknown archive_identifier: %s", args.restart)
+            sys.exit(1)
+        totals = pipeline.restart(t)
+        logger.info("restart complete for %s: %s", args.restart, dict(totals))
+        return
+    if args.restart_all:
+        _restart_all(pipeline, args)
         return
     if args.reprocess_stale or args.force:
         _reprocess_stale(pipeline, args)

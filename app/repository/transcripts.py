@@ -125,6 +125,24 @@ class TranscriptRepository:
         with self.engine.begin() as conn:
             return (conn.execute(sql, {"id": transcript_id}).rowcount or 0) > 0
 
+    def reset_full(self, transcript_id: int) -> bool:
+        """Reset an item all the way back to 'discovered'.
+
+        Clears the fetched transcript text and every downstream stage marker so
+        the next run re-fetches from archive.org and re-runs all passes.
+        """
+        sql = text(
+            """
+            UPDATE cnbc.transcripts
+               SET status = 'discovered', raw_text = NULL, content_hash = NULL,
+                   caption_file = NULL, attempts = 0, last_error = NULL,
+                   fetched_at = NULL, distilled_at = NULL, delivered_at = NULL
+             WHERE id = :id
+            """
+        )
+        with self.engine.begin() as conn:
+            return (conn.execute(sql, {"id": transcript_id}).rowcount or 0) > 0
+
     # -- selection ---------------------------------------------------------
     def list_actionable(self, *, limit: int = 100, max_attempts: int = 5) -> list[Transcript]:
         sql = text(
@@ -199,6 +217,31 @@ class TranscriptRepository:
             params["cur_prompt"] = current_prompt
         where = " WHERE " + " AND ".join(clauses)
         sql = text(f"SELECT {_COLUMNS} FROM cnbc.transcripts t{where} ORDER BY t.id")
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, params).mappings().all()
+        return [_row_to_transcript(r) for r in rows]
+
+    def restart_candidates(
+        self, *, show: str | None = None, from_date=None, to_date=None,
+    ) -> list[Transcript]:
+        """All transcripts matching the filters, regardless of status/raw_text.
+
+        Used by a full restart, which re-fetches from archive.org, so items that
+        never fetched (or failed) are included too.
+        """
+        clauses: list[str] = []
+        params: dict = {}
+        if show:
+            clauses.append("show_slug = :show")
+            params["show"] = show
+        if from_date:
+            clauses.append("air_date >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            clauses.append("air_date <= :to_date")
+            params["to_date"] = to_date
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = text(f"SELECT {_COLUMNS} FROM cnbc.transcripts{where} ORDER BY id")
         with self.engine.connect() as conn:
             rows = conn.execute(sql, params).mappings().all()
         return [_row_to_transcript(r) for r in rows]
