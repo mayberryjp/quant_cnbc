@@ -82,6 +82,28 @@ class EntityMention(BaseModel):
     confidence: float | None = None
     context: str | None = None
 
+    @field_validator("entity_type", mode="before")
+    @classmethod
+    def _coerce_entity_type(cls, v: object) -> object:
+        """Fall back to ``company`` for LLM-invented types (e.g. 'index', 'etf')."""
+        if v is None or v == "":
+            return EntityType.company
+        try:
+            return EntityType(v)
+        except (ValueError, TypeError):
+            return EntityType.company
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _coerce_direction(cls, v: object) -> object:
+        """Drop LLM-invented directions rather than fail validation."""
+        if v is None or v == "":
+            return None
+        try:
+            return Direction(v)
+        except (ValueError, TypeError):
+            return None
+
     @field_validator("ticker")
     @classmethod
     def _upper_ticker(cls, v: str | None) -> str | None:

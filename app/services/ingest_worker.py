@@ -5,6 +5,7 @@ Usage:
         [--once] [--date YYYY-MM-DD]
         [--reprocess <archive_identifier>]
         [--reprocess-stale [--show S] [--from-date D] [--to-date D]]
+        [--force [--show S] [--from-date D] [--to-date D]]
 """
 
 from __future__ import annotations
@@ -82,14 +83,24 @@ def seconds_until_wake(wake_time: str, now: datetime | None = None) -> float:
 
 
 def _reprocess_stale(pipeline: Pipeline, args) -> int:
+    """Reprocess saved transcripts matching the filters.
+
+    By default only *stale* items (whose current distillation predates the
+    configured model/prompt) are reprocessed. With ``--force`` every matching
+    transcript that has saved ``raw_text`` is reprocessed, even ``done`` ones.
+    """
+    force = getattr(args, "force", False)
     candidates = pipeline.transcripts.reprocess_candidates(
         show=args.show, from_date=args.from_date, to_date=args.to_date,
-        only_stale=True, current_model=settings.llm_model,
+        only_stale=not force, current_model=settings.llm_model,
         current_prompt=settings.distill_prompt_version,
     )
     for t in candidates:
         pipeline.reprocess(t)
-    logger.info("reprocessed %d stale transcript(s)", len(candidates))
+    logger.info(
+        "reprocessed %d transcript(s) (%s)",
+        len(candidates), "forced" if force else "stale",
+    )
     return len(candidates)
 
 
@@ -106,6 +117,10 @@ def run_worker(argv: list[str] | None = None) -> None:
     parser.add_argument("--date", type=lambda s: date.fromisoformat(s), default=None)
     parser.add_argument("--reprocess", default=None, metavar="ARCHIVE_IDENTIFIER")
     parser.add_argument("--reprocess-stale", action="store_true")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="reprocess ALL matching transcripts (even 'done'), not just stale ones",
+    )
     parser.add_argument("--show", default=None)
     parser.add_argument("--from-date", type=lambda s: date.fromisoformat(s), default=None)
     parser.add_argument("--to-date", type=lambda s: date.fromisoformat(s), default=None)
@@ -120,7 +135,7 @@ def run_worker(argv: list[str] | None = None) -> None:
             sys.exit(1)
         pipeline.reprocess(t)
         return
-    if args.reprocess_stale:
+    if args.reprocess_stale or args.force:
         _reprocess_stale(pipeline, args)
         return
     if args.once:

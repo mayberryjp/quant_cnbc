@@ -54,6 +54,17 @@ class TestEntityPass:
         rows = build_rows(_transcript(), out, model="m1", prompt_version="v1")
         assert len(rows) == 1
 
+    def test_unknown_entity_type_and_direction_coerced(self):
+        # phi4 sometimes emits types/directions outside the enum; these must not
+        # fail validation for the whole batch.
+        from app.models.domain import EntityType
+        llm = FakeLLM({"entities": [
+            {"raw_mention": "S&P 500", "entity_type": "index", "direction": "up"},
+        ]})
+        out, _ = extract_entities(llm, "summary")
+        assert out.entities[0].entity_type == EntityType.company
+        assert out.entities[0].direction is None
+
     @respx.mock
     def test_submit_resolved_ticker(self):
         respx.post("http://signals.local/signals").mock(return_value=httpx.Response(201, json={}))
