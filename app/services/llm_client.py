@@ -77,7 +77,13 @@ class LLMClient:
         resp.raise_for_status()
         body = resp.json()
         content = body["choices"][0]["message"]["content"]
-        return parse_json(content), body.get("usage", {}) or {}
+        usage = body.get("usage", {}) or {}
+        log.info(
+            "llm call: model=%s tokens=%s (prompt=%s, completion=%s)",
+            self.model, usage.get("total_tokens", "?"),
+            usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"),
+        )
+        return parse_json(content), usage
 
     def close(self) -> None:
         self._client.close()

@@ -6,6 +6,7 @@ Usage:
         [--reprocess <archive_identifier>]
         [--restart <archive_identifier>]
         [--restart-all [--show S] [--from-date D] [--to-date D]]
+        [--retry-failed [--show S] [--from-date D] [--to-date D] [--max-attempts N]]
         [--reprocess-stale [--show S] [--from-date D] [--to-date D]]
         [--force [--show S] [--from-date D] [--to-date D]]
 """
@@ -89,9 +90,11 @@ def _restart_all(pipeline: Pipeline, args) -> int:
     candidates = pipeline.transcripts.restart_candidates(
         show=args.show, from_date=args.from_date, to_date=args.to_date,
     )
-    for t in candidates:
+    logger.info("restart-all: %d transcript(s) to restart", len(candidates))
+    for i, t in enumerate(candidates, 1):
+        logger.info("restart-all: [%d/%d] %s", i, len(candidates), t.archive_identifier)
         pipeline.restart(t)
-    logger.info("restarted %d transcript(s)", len(candidates))
+    logger.info("restart-all: restarted %d transcript(s)", len(candidates))
     return len(candidates)
 
 
@@ -108,12 +111,12 @@ def _reprocess_stale(pipeline: Pipeline, args) -> int:
         only_stale=not force, current_model=settings.llm_model,
         current_prompt=settings.distill_prompt_version,
     )
-    for t in candidates:
+    mode = "forced" if force else "stale"
+    logger.info("reprocess (%s): %d transcript(s) to reprocess", mode, len(candidates))
+    for i, t in enumerate(candidates, 1):
+        logger.info("reprocess (%s): [%d/%d] %s", mode, i, len(candidates), t.archive_identifier)
         pipeline.reprocess(t)
-    logger.info(
-        "reprocessed %d transcript(s) (%s)",
-        len(candidates), "forced" if force else "stale",
-    )
+    logger.info("reprocess (%s): reprocessed %d transcript(s)", mode, len(candidates))
     return len(candidates)
 
 
@@ -136,6 +139,14 @@ def run_worker(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--restart-all", action="store_true",
         help="fully restart ALL matching transcripts (re-fetch + all passes)",
+    )
+    parser.add_argument(
+        "--retry-failed", action="store_true",
+        help="re-run every transcript stuck in the 'failed' state (re-fetch + all passes)",
+    )
+    parser.add_argument(
+        "--max-attempts", type=int, default=None,
+        help="with --retry-failed, only retry rows whose attempts are below this ceiling",
     )
     parser.add_argument("--reprocess-stale", action="store_true")
     parser.add_argument(
@@ -166,6 +177,13 @@ def run_worker(argv: list[str] | None = None) -> None:
         return
     if args.restart_all:
         _restart_all(pipeline, args)
+        return
+    if args.retry_failed:
+        totals = pipeline.retry_failed(
+            show=args.show, from_date=args.from_date, to_date=args.to_date,
+            max_attempts=args.max_attempts,
+        )
+        logger.info("retry-failed complete: %s", dict(totals))
         return
     if args.reprocess_stale or args.force:
         _reprocess_stale(pipeline, args)

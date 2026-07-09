@@ -60,11 +60,14 @@ class Pipeline:
     # -- per-item processing ----------------------------------------------
     def process_one(self, transcript: Transcript) -> Counter:
         c: Counter = Counter()
+        aid = transcript.archive_identifier
         try:
             status = transcript.status
+            log.info("process %s: entering at status=%s", aid, getattr(status, "value", status))
 
             if status == TranscriptStatus.discovered:
                 if not fetch_transcript(self.archive, self.transcripts, transcript):
+                    log.warning("process %s: fetch failed, stopping", aid)
                     c["failures"] += 1
                     return c
                 transcript = self.transcripts.get_by_id(transcript.id)
@@ -72,7 +75,9 @@ class Pipeline:
                 c["transcripts_fetched"] += 1
 
             if status == TranscriptStatus.fetched:
-                out, usage = distiller.distill(self.llm, transcript.raw_text or "")
+                raw = transcript.raw_text or ""
+                log.info("process %s: distilling (%d chars of transcript)", aid, len(raw))
+                out, usage = distiller.distill(self.llm, raw)
                 self.distillations.upsert(Distillation(
                     transcript_id=transcript.id, model=self.model,
                     prompt_version=self.distill_pv, summary=out.summary,
@@ -84,17 +89,28 @@ class Pipeline:
                 self.transcripts.touch_stage(transcript.id, "distilled")
                 status = TranscriptStatus.distilled
                 c["distilled"] += 1
+                log.info(
+                    "process %s: distilled (summary=%d chars, %d topics, %d segments, tokens=%s)",
+                    aid, len(out.summary), len(out.key_topics), len(out.segments),
+                    (usage or {}).get("total_tokens", "?"),
+                )
 
             if status == TranscriptStatus.distilled:
                 current = self.distillations.get_current(transcript.id)
                 summary = current.summary if current else (transcript.raw_text or "")
+                log.info("process %s: delivering sentiment", aid)
                 c.update(self._deliver_sentiment(transcript, summary))
+                log.info("process %s: delivering entities", aid)
                 c.update(self._deliver_entities(transcript, summary))
                 self.transcripts.touch_stage(transcript.id, "delivered")
                 self.transcripts.set_status(transcript.id, TranscriptStatus.done)
+                log.info(
+                    "process %s: DONE (sentiments_sent=%d, entities_submitted=%d)",
+                    aid, c.get("sentiments_sent", 0), c.get("entities_submitted", 0),
+                )
             return c
         except Exception as exc:  # isolate per-item failures
-            log.exception("processing failed for %s", transcript.archive_identifier)
+            log.exception("processing failed for %s", aid)
             self.transcripts.set_status(
                 transcript.id, TranscriptStatus.failed,
                 last_error=str(exc)[:500], bump_attempts=True,
@@ -140,11 +156,15 @@ class Pipeline:
     # -- run ---------------------------------------------------------------
     def run(self, run_date: date | None = None, *, limit: int = 200) -> Counter:
         run_date = run_date or datetime.now(timezone.utc).date()
+        log.info("run start: run_date=%s", run_date)
         self.runs.start_run(run_date)
         totals: Counter = Counter()
         try:
             self.discover()
-            for t in self.transcripts.list_actionable(limit=limit, max_attempts=self.max_attempts):
+            actionable = self.transcripts.list_actionable(limit=limit, max_attempts=self.max_attempts)
+            log.info("run: %d actionable item(s) to process", len(actionable))
+            for i, t in enumerate(actionable, 1):
+                log.info("run: [%d/%d] %s", i, len(actionable), t.archive_identifier)
                 c = self.process_one(t)
                 totals.update(c)
                 self.runs.add_counters(run_date, **c)
@@ -153,6 +173,7 @@ class Pipeline:
             log.exception("run failed")
             status = "failed"
         self.runs.complete_run(run_date, status)
+        log.info("run complete: run_date=%s status=%s totals=%s", run_date, status, dict(totals))
         return totals
 
     # -- reprocessing (slice 9) -------------------------------------------
@@ -175,3 +196,27 @@ class Pipeline:
         if run_date is not None:
             self.runs.add_counters(run_date, **c)
         return c
+
+    def retry_failed(
+        self, *, show: str | None = None, from_date=None, to_date=None,
+        max_attempts: int | None = None, run_date: date | None = None,
+    ) -> Counter:
+        """Re-run every transcript stuck in the 'failed' state.
+
+        Each item is fully restarted (reset to 'discovered' → re-fetch →
+        re-run all passes), which recovers both fetch failures and downstream
+        pass failures. Returns aggregate counters including ``retried`` (the
+        number of failed items that were attempted).
+        """
+        candidates = self.transcripts.failed_candidates(
+            show=show, from_date=from_date, to_date=to_date, max_attempts=max_attempts,
+        )
+        log.info("retry-failed: %d failed transcript(s) to retry", len(candidates))
+        totals: Counter = Counter()
+        for i, t in enumerate(candidates, 1):
+            log.info("retry-failed: [%d/%d] %s", i, len(candidates), t.archive_identifier)
+            totals.update(self.restart(t, run_date=run_date))
+        totals["retried"] = len(candidates)
+        log.info("retry-failed: retried %d, totals=%s", len(candidates), dict(totals))
+        return totals
+

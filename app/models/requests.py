@@ -27,3 +27,15 @@ class ReprocessRequest(BaseModel):
     from_stage: Literal["distill", "sentiment", "entities"] | None = Field(
         default=None, alias="from"
     )
+
+
+class RetryFailedRequest(BaseModel):
+    """Body of POST /retry-failed (re-run items in the 'failed' state)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    show: str | None = None
+    from_date: date | None = None
+    to_date: date | None = None
+    # Only retry rows whose attempt count is still below this ceiling.
+    max_attempts: int | None = None
+

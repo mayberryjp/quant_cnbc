@@ -213,3 +213,32 @@ class TestDiscoveryAndFetch:
                        source_url=f"https://archive.org/details/{aid}")
         assert fetch_transcript(client, trepo, t) is False
         assert trepo.items[aid]["status"] == "failed"
+
+    @respx.mock
+    def test_fetch_page_transcript_retries_transient_timeout(self):
+        # A transient connect timeout should be retried, not fail the item.
+        aid = "CNBC_20260702_220000_Mad_Money"
+        route = respx.get(f"https://archive.org/details/{aid}").mock(
+            side_effect=[
+                httpx.ConnectTimeout("timed out"),
+                httpx.Response(200, text=DETAILS_HTML),
+            ]
+        )
+        client = ArchiveClient(rate_limit=0, retry_backoff=0)
+        text = client.fetch_page_transcript(aid)
+        assert route.call_count == 2
+        assert "Jim Cramer says buy Apple." in text
+
+    @respx.mock
+    def test_fetch_page_transcript_raises_after_max_retries(self):
+        aid = "CNBC_20260702_220000_Mad_Money"
+        respx.get(f"https://archive.org/details/{aid}").mock(
+            side_effect=httpx.ConnectTimeout("timed out")
+        )
+        client = ArchiveClient(rate_limit=0, max_retries=2, retry_backoff=0)
+        try:
+            client.fetch_page_transcript(aid)
+            assert False, "expected ConnectTimeout"
+        except httpx.ConnectTimeout:
+            pass
+

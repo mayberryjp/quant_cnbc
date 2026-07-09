@@ -245,3 +245,33 @@ class TranscriptRepository:
         with self.engine.connect() as conn:
             rows = conn.execute(sql, params).mappings().all()
         return [_row_to_transcript(r) for r in rows]
+
+    def failed_candidates(
+        self, *, show: str | None = None, from_date=None, to_date=None,
+        max_attempts: int | None = None,
+    ) -> list[Transcript]:
+        """Transcripts currently in the 'failed' state, for a retry sweep.
+
+        Optionally filtered by show/date and capped to rows whose attempt count
+        is still below ``max_attempts`` (so exhausted items are left alone).
+        """
+        clauses: list[str] = ["status = 'failed'"]
+        params: dict = {}
+        if show:
+            clauses.append("show_slug = :show")
+            params["show"] = show
+        if from_date:
+            clauses.append("air_date >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            clauses.append("air_date <= :to_date")
+            params["to_date"] = to_date
+        if max_attempts is not None:
+            clauses.append("attempts < :max_attempts")
+            params["max_attempts"] = max_attempts
+        where = " WHERE " + " AND ".join(clauses)
+        sql = text(f"SELECT {_COLUMNS} FROM cnbc.transcripts{where} ORDER BY id")
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, params).mappings().all()
+        return [_row_to_transcript(r) for r in rows]
+

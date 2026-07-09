@@ -39,7 +39,13 @@ def extract_entities(llm_client, distill_summary: str) -> tuple[EntityOutput, di
     data, usage = llm_client.complete_json(
         ENTITY_SYSTEM, f"Distilled summary:\n{distill_summary}\n\nReturn the JSON object."
     )
-    return EntityOutput.model_validate(data), usage
+    out = EntityOutput.model_validate(data)
+    resolved = sum(1 for e in out.entities if e.ticker)
+    log.info(
+        "entities: extracted %d mention(s), %d resolved to a ticker",
+        len(out.entities), resolved,
+    )
+    return out, usage
 
 
 def build_rows(

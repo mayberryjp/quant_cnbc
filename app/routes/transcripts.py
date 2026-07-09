@@ -10,7 +10,8 @@ from pydantic import ValidationError
 
 from app import dependencies as deps
 from app.config import settings
-from app.models.requests import ReprocessRequest, RunTriggerRequest
+from app.models.requests import ReprocessRequest, RetryFailedRequest, RunTriggerRequest
+
 from app.models.responses import (
     DistillationResponse,
     TranscriptDetailResponse,
@@ -114,3 +115,19 @@ def trigger_run():
     totals = build_pipeline().run(body.run_date)
     response.status = 202
     return {"status": "completed", "counters": dict(totals)}
+
+
+@sub.post("/retry-failed")
+def retry_failed():
+    try:
+        body = RetryFailedRequest(**(request.json or {}))
+    except ValidationError as e:
+        raise _json_error(422, json.loads(e.json()))
+    from app.services.ingest_worker import build_pipeline
+
+    totals = build_pipeline().retry_failed(
+        show=body.show, from_date=body.from_date, to_date=body.to_date,
+        max_attempts=body.max_attempts,
+    )
+    response.status = 202
+    return {"status": "retried", "counters": dict(totals)}

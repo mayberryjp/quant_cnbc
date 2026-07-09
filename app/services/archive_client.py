@@ -8,6 +8,7 @@ canonical dedup/tracking key. Discovery pages the advancedsearch API by
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from datetime import date, datetime, timezone
 from html import unescape
 
 import httpx
+
+log = logging.getLogger("quant_cnbc.archive")
 
 # Caption filename preference (best first).
 _CAPTION_SUFFIXES = (".srt", ".vtt", ".cc5.txt", ".cc1.txt", ".closedcaptions.txt", ".djvu.txt", ".txt")
@@ -117,10 +120,13 @@ class ArchiveClient:
     def __init__(
         self, *, base_url: str = "https://archive.org", collection: str = "TV-CNBC",
         rate_limit: float = 1.0, client: httpx.Client | None = None,
+        max_retries: int = 3, retry_backoff: float = 2.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.collection = collection
         self.rate_limit = rate_limit
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
         self._client = client or httpx.Client(
             timeout=60.0, headers={"User-Agent": "quant_cnbc/0.1 (+https://github.com/mayberryjp/quant_cnbc)"}
         )
@@ -133,6 +139,32 @@ class ArchiveClient:
         if elapsed < self.rate_limit:
             time.sleep(self.rate_limit - elapsed)
         self._last_call = time.monotonic()
+
+    def _get(self, url: str, **kwargs) -> httpx.Response:
+        """Throttled GET that retries transient network errors with backoff.
+
+        archive.org intermittently drops or times out connections; a single
+        blip should not permanently fail an item. Transport errors (connect /
+        read timeouts, connection resets) are retried up to ``max_retries``
+        times; HTTP status errors are left to the caller's ``raise_for_status``.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            self._throttle()
+            try:
+                return self._client.get(url, **kwargs)
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if attempt >= self.max_retries:
+                    break
+                delay = self.retry_backoff * (2 ** (attempt - 1))
+                log.warning(
+                    "GET %s failed (%s: %s), retry %d/%d in %.1fs",
+                    url, type(exc).__name__, exc, attempt, self.max_retries - 1, delay,
+                )
+                time.sleep(delay)
+        assert last_exc is not None
+        raise last_exc
 
     def search(
         self, *, since: datetime | None = None, rows: int = 100, page: int = 1,
@@ -147,8 +179,7 @@ class ArchiveClient:
             ("sort[]", "addeddate asc"), ("rows", str(rows)),
             ("page", str(page)), ("output", "json"),
         ]
-        self._throttle()
-        resp = self._client.get(f"{self.base_url}/advancedsearch.php", params=params)
+        resp = self._get(f"{self.base_url}/advancedsearch.php", params=params)
         resp.raise_for_status()
         docs = resp.json().get("response", {}).get("docs", [])
         items = (self._to_item(d) for d in docs)
@@ -172,21 +203,18 @@ class ArchiveClient:
         )
 
     def list_files(self, identifier: str) -> list[dict]:
-        self._throttle()
-        resp = self._client.get(f"{self.base_url}/metadata/{identifier}")
+        resp = self._get(f"{self.base_url}/metadata/{identifier}")
         resp.raise_for_status()
         return resp.json().get("files", [])
 
     def download_file(self, identifier: str, filename: str) -> str:
-        self._throttle()
-        resp = self._client.get(f"{self.base_url}/download/{identifier}/{filename}")
+        resp = self._get(f"{self.base_url}/download/{identifier}/{filename}")
         resp.raise_for_status()
         return resp.text
 
     def fetch_page_transcript(self, identifier: str) -> str:
         """Fetch the item details page and extract its inline caption transcript."""
-        self._throttle()
-        resp = self._client.get(f"{self.base_url}/details/{identifier}")
+        resp = self._get(f"{self.base_url}/details/{identifier}")
         resp.raise_for_status()
         return parse_page_transcript(resp.text)
 

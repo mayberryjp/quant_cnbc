@@ -92,6 +92,10 @@ class FakePipeline:
     def run(self, run_date):
         return Counter({"transcripts_fetched": 3})
 
+    def retry_failed(self, **kw):
+        self.retry_kwargs = kw
+        return Counter({"retried": 2, "reprocessed": 2, "distilled": 1, "failures": 1})
+
 
 class TestReprocessEndpoints:
     def test_reprocess_one(self, app_client, monkeypatch):
@@ -112,3 +116,23 @@ class TestReprocessEndpoints:
         resp = app_client.post_json("/runs/trigger", {"date": "2026-07-03"})
         assert resp.status_int == 202
         assert resp.json["counters"]["transcripts_fetched"] == 3
+
+    def test_retry_failed(self, app_client, monkeypatch):
+        fake = FakePipeline()
+        monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
+        resp = app_client.post_json("/retry-failed", {"show": "Mad_Money", "max_attempts": 5})
+        assert resp.status_int == 202
+        assert resp.json["status"] == "retried"
+        assert resp.json["counters"]["retried"] == 2
+        assert fake.retry_kwargs == {
+            "show": "Mad_Money", "from_date": None, "to_date": None, "max_attempts": 5,
+        }
+
+    def test_retry_failed_empty_body(self, app_client, monkeypatch):
+        fake = FakePipeline()
+        monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
+        resp = app_client.post_json("/retry-failed", {})
+        assert resp.status_int == 202
+        assert fake.retry_kwargs == {
+            "show": None, "from_date": None, "to_date": None, "max_attempts": None,
+        }

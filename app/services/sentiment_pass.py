@@ -34,7 +34,9 @@ def extract_sentiment(llm_client, distill_summary: str) -> tuple[SentimentOutput
     data, usage = llm_client.complete_json(
         SENTIMENT_SYSTEM, f"Distilled summary:\n{distill_summary}\n\nReturn the JSON object."
     )
-    return SentimentOutput.model_validate(data), usage
+    out = SentimentOutput.model_validate(data)
+    log.info("sentiment: extracted %d observation(s)", len(out.observations))
+    return out, usage
 
 
 def build_rows(

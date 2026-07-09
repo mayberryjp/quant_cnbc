@@ -85,6 +85,7 @@ def fetch_transcript(client: ArchiveClient, transcript_repo, transcript) -> bool
     True on success. Failures are recorded on the row and never raise.
     """
     try:
+        log.info("fetch %s: scraping item-page transcript", transcript.archive_identifier)
         normalized = client.fetch_page_transcript(transcript.archive_identifier)
         if not normalized:
             log.warning(
@@ -96,6 +97,10 @@ def fetch_transcript(client: ArchiveClient, transcript_repo, transcript) -> bool
                 last_error="item page has no transcript text", bump_attempts=True,
             )
             return False
+        log.info(
+            "fetch %s: got %d chars of transcript",
+            transcript.archive_identifier, len(normalized),
+        )
         transcript_repo.mark_fetched(
             transcript.id, raw_text=normalized,
             content_hash=content_hash(normalized), caption_file="item-page",

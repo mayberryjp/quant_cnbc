@@ -41,17 +41,22 @@ def distill(
     Returns (DistillOutput, aggregated token usage).
     """
     if len(text) <= max_chunk_chars:
+        log.info("distill: single-shot over %d chars", len(text))
         data, usage = llm_client.complete_json(DISTILL_SYSTEM, _user_prompt(text))
         return DistillOutput.model_validate(data), usage
 
     # Map: summarize each chunk, then reduce the concatenation.
+    chunks = _chunks(text, max_chunk_chars)
+    log.info("distill: map/reduce over %d chunks (%d chars total)", len(chunks), len(text))
     partials: list[str] = []
     total_usage: dict[str, Any] = {}
-    for chunk in _chunks(text, max_chunk_chars):
+    for idx, chunk in enumerate(chunks, 1):
+        log.info("distill: mapping chunk %d/%d (%d chars)", idx, len(chunks), len(chunk))
         data, usage = llm_client.complete_json(DISTILL_SYSTEM, _user_prompt(chunk))
         partials.append(DistillOutput.model_validate(data).summary)
         _merge_usage(total_usage, usage)
 
+    log.info("distill: reducing %d partial summaries", len(partials))
     combined = "\n\n".join(f"- {p}" for p in partials)
     data, usage = llm_client.complete_json(_REDUCE_SYSTEM, _user_prompt(combined))
     _merge_usage(total_usage, usage)
