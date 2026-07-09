@@ -44,7 +44,8 @@ class DistillationRepository:
                          key_topics, segments, token_usage, is_current)
                     VALUES
                         (:transcript_id, :model, :prompt_version, :summary,
-                         :key_topics::jsonb, :segments::jsonb, :token_usage::jsonb, true)
+                         CAST(:key_topics AS jsonb), CAST(:segments AS jsonb),
+                         CAST(:token_usage AS jsonb), true)
                     ON CONFLICT (transcript_id, model, prompt_version) DO UPDATE
                        SET summary = EXCLUDED.summary,
                            key_topics = EXCLUDED.key_topics,
