@@ -70,27 +70,60 @@ def get_transcript(transcript_id: int):
 @sub.post("/transcripts/<archive_identifier:path>/reprocess")
 def reprocess_one(archive_identifier: str):
     from app.services.ingest_worker import build_pipeline
+    from app.services.jobs import registry
 
     pipeline = build_pipeline()
     t = pipeline.transcripts.get_by_identifier(archive_identifier)
     if t is None:
         raise _json_error(404, "Transcript not found")
-    totals = pipeline.reprocess(t)
+
+    # Re-distilling and re-delivering can take several minutes; run it in the
+    # background so the request returns immediately.
+    job = registry.submit(
+        "reprocess", lambda: pipeline.reprocess(t), key=f"reprocess:{archive_identifier}"
+    )
     response.status = 202
-    return {"status": "reprocessed", "archive_identifier": archive_identifier, "counters": dict(totals)}
+    return {
+        "status": "accepted",
+        "job_id": job["id"],
+        "job_status": job["status"],
+        "archive_identifier": archive_identifier,
+    }
 
 
 @sub.post("/transcripts/<archive_identifier:path>/restart")
 def restart_one(archive_identifier: str):
     from app.services.ingest_worker import build_pipeline
+    from app.services.jobs import registry
 
     pipeline = build_pipeline()
     t = pipeline.transcripts.get_by_identifier(archive_identifier)
     if t is None:
         raise _json_error(404, "Transcript not found")
-    totals = pipeline.restart(t)
+
+    # A full restart re-fetches and re-runs every pass (15-30 min); run it in the
+    # background so the request returns immediately instead of holding the
+    # connection open until the job finishes.
+    job = registry.submit(
+        "restart", lambda: pipeline.restart(t), key=f"restart:{archive_identifier}"
+    )
     response.status = 202
-    return {"status": "restarted", "archive_identifier": archive_identifier, "counters": dict(totals)}
+    return {
+        "status": "accepted",
+        "job_id": job["id"],
+        "job_status": job["status"],
+        "archive_identifier": archive_identifier,
+    }
+
+
+@sub.get("/jobs/<job_id>")
+def get_job(job_id: str):
+    from app.services.jobs import registry
+
+    job = registry.get(job_id)
+    if job is None:
+        raise _json_error(404, "Job not found")
+    return job
 
 
 @sub.post("/reprocess")
@@ -100,6 +133,7 @@ def reprocess_bulk():
     except ValidationError as e:
         raise _json_error(422, json.loads(e.json()))
     from app.services.ingest_worker import build_pipeline
+    from app.services.jobs import registry
 
     pipeline = build_pipeline()
     candidates = pipeline.transcripts.reprocess_candidates(
@@ -107,11 +141,18 @@ def reprocess_bulk():
         only_stale=body.only_stale, current_model=settings.llm_model,
         current_prompt=settings.distill_prompt_version,
     )
-    for t in candidates:
-        pipeline.reprocess(t)
+
+    def _job():
+        for t in candidates:
+            pipeline.reprocess(t)
+        return {"reprocessed": len(candidates)}
+
+    job = registry.submit("reprocess-bulk", _job)
     response.status = 202
     return {
-        "status": "reprocessing",
+        "status": "accepted",
+        "job_id": job["id"],
+        "job_status": job["status"],
         "matched": len(candidates),
         "archive_identifiers": [t.archive_identifier for t in candidates],
     }
@@ -124,10 +165,12 @@ def trigger_run():
     except ValidationError as e:
         raise _json_error(422, json.loads(e.json()))
     from app.services.ingest_worker import build_pipeline
+    from app.services.jobs import registry
 
-    totals = build_pipeline().run(body.run_date)
+    run_date = body.run_date
+    job = registry.submit("run", lambda: build_pipeline().run(run_date))
     response.status = 202
-    return {"status": "completed", "counters": dict(totals)}
+    return {"status": "accepted", "job_id": job["id"], "job_status": job["status"]}
 
 
 @sub.post("/retry-failed")
@@ -137,10 +180,14 @@ def retry_failed():
     except ValidationError as e:
         raise _json_error(422, json.loads(e.json()))
     from app.services.ingest_worker import build_pipeline
+    from app.services.jobs import registry
 
-    totals = build_pipeline().retry_failed(
-        show=body.show, from_date=body.from_date, to_date=body.to_date,
-        max_attempts=body.max_attempts,
-    )
+    def _job():
+        return build_pipeline().retry_failed(
+            show=body.show, from_date=body.from_date, to_date=body.to_date,
+            max_attempts=body.max_attempts,
+        )
+
+    job = registry.submit("retry-failed", _job)
     response.status = 202
-    return {"status": "retried", "counters": dict(totals)}
+    return {"status": "accepted", "job_id": job["id"], "job_status": job["status"]}

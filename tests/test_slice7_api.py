@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from datetime import date
 
@@ -113,6 +114,11 @@ class FakePipeline:
         self.reprocessed.append(t.archive_identifier)
         return Counter({"reprocessed": 1})
 
+    def restart(self, t):
+        self.restarted = getattr(self, "restarted", [])
+        self.restarted.append(t.archive_identifier)
+        return Counter({"reprocessed": 1})
+
     def run(self, run_date):
         return Counter({"transcripts_fetched": 3})
 
@@ -122,12 +128,26 @@ class FakePipeline:
 
 
 class TestReprocessEndpoints:
+    @staticmethod
+    def _await_job(app_client, resp):
+        """Block until the background job referenced by ``resp`` finishes."""
+        job_id = resp.json["job_id"]
+        for _ in range(200):
+            job = app_client.get(f"/jobs/{job_id}").json
+            if job["status"] != "running":
+                return job
+            time.sleep(0.01)
+        raise AssertionError("job did not finish in time")
+
     def test_reprocess_one(self, app_client, monkeypatch):
         fake = FakePipeline()
         monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
         resp = app_client.post("/transcripts/CNBC_20260702_220000_Mad_Money/reprocess")
         assert resp.status_int == 202
-        assert resp.json["status"] == "reprocessed"
+        assert resp.json["status"] == "accepted"
+        job = self._await_job(app_client, resp)
+        assert job["status"] == "completed"
+        assert job["result"]["reprocessed"] == 1
         assert fake.reprocessed == ["CNBC_20260702_220000_Mad_Money"]
 
     def test_reprocess_one_404(self, app_client, monkeypatch):
@@ -135,19 +155,38 @@ class TestReprocessEndpoints:
         resp = app_client.post("/transcripts/UNKNOWN/reprocess", expect_errors=True)
         assert resp.status_int == 404
 
+    def test_restart_one(self, app_client, monkeypatch):
+        fake = FakePipeline()
+        monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
+        resp = app_client.post("/transcripts/CNBC_20260702_220000_Mad_Money/restart")
+        assert resp.status_int == 202
+        assert resp.json["status"] == "accepted"
+        job = self._await_job(app_client, resp)
+        assert job["status"] == "completed"
+        assert job["result"]["reprocessed"] == 1
+        assert fake.restarted == ["CNBC_20260702_220000_Mad_Money"]
+
+    def test_restart_one_404(self, app_client, monkeypatch):
+        monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: FakePipeline())
+        resp = app_client.post("/transcripts/UNKNOWN/restart", expect_errors=True)
+        assert resp.status_int == 404
+
     def test_trigger_run(self, app_client, monkeypatch):
         monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: FakePipeline())
         resp = app_client.post_json("/runs/trigger", {"date": "2026-07-03"})
         assert resp.status_int == 202
-        assert resp.json["counters"]["transcripts_fetched"] == 3
+        assert resp.json["status"] == "accepted"
+        job = self._await_job(app_client, resp)
+        assert job["result"]["transcripts_fetched"] == 3
 
     def test_retry_failed(self, app_client, monkeypatch):
         fake = FakePipeline()
         monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
         resp = app_client.post_json("/retry-failed", {"show": "Mad_Money", "max_attempts": 5})
         assert resp.status_int == 202
-        assert resp.json["status"] == "retried"
-        assert resp.json["counters"]["retried"] == 2
+        assert resp.json["status"] == "accepted"
+        job = self._await_job(app_client, resp)
+        assert job["result"]["retried"] == 2
         assert fake.retry_kwargs == {
             "show": "Mad_Money", "from_date": None, "to_date": None, "max_attempts": 5,
         }
@@ -157,6 +196,7 @@ class TestReprocessEndpoints:
         monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
         resp = app_client.post_json("/retry-failed", {})
         assert resp.status_int == 202
+        self._await_job(app_client, resp)
         assert fake.retry_kwargs == {
             "show": None, "from_date": None, "to_date": None, "max_attempts": None,
         }
