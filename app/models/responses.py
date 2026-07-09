@@ -18,6 +18,7 @@ class TranscriptResponse(BaseModel):
     source_url: str
     status: str
     attempts: int = 0
+    last_error: str | None = None
     discovered_at: datetime | None = None
     fetched_at: datetime | None = None
     distilled_at: datetime | None = None
@@ -32,6 +33,7 @@ class DistillationResponse(BaseModel):
     summary: str
     key_topics: list[str] = []
     segments: list[dict[str, Any]] = []
+    token_usage: dict[str, Any] | None = None
     is_current: bool = True
     created_at: datetime | None = None
 
