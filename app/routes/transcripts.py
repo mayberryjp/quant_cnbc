@@ -80,6 +80,19 @@ def reprocess_one(archive_identifier: str):
     return {"status": "reprocessed", "archive_identifier": archive_identifier, "counters": dict(totals)}
 
 
+@sub.post("/transcripts/<archive_identifier:path>/restart")
+def restart_one(archive_identifier: str):
+    from app.services.ingest_worker import build_pipeline
+
+    pipeline = build_pipeline()
+    t = pipeline.transcripts.get_by_identifier(archive_identifier)
+    if t is None:
+        raise _json_error(404, "Transcript not found")
+    totals = pipeline.restart(t)
+    response.status = 202
+    return {"status": "restarted", "archive_identifier": archive_identifier, "counters": dict(totals)}
+
+
 @sub.post("/reprocess")
 def reprocess_bulk():
     try:
