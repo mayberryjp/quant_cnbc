@@ -77,11 +77,17 @@ class LLMClient:
         resp.raise_for_status()
         body = resp.json()
         content = body["choices"][0]["message"]["content"]
-        usage = body.get("usage", {}) or {}
+        usage = dict(body.get("usage", {}) or {})
+        # Character accounting, summed alongside tokens across map/reduce calls.
+        # prompt_chars = system + user actually sent; completion_chars = raw
+        # model output before JSON parsing.
+        usage["prompt_chars"] = len(system) + len(user)
+        usage["completion_chars"] = len(content or "")
         log.info(
-            "llm call: model=%s tokens=%s (prompt=%s, completion=%s)",
+            "llm call: model=%s tokens=%s (prompt=%s, completion=%s) chars=%d/%d",
             self.model, usage.get("total_tokens", "?"),
             usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"),
+            usage["prompt_chars"], usage["completion_chars"],
         )
         return parse_json(content), usage
 

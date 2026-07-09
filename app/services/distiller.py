@@ -10,18 +10,21 @@ from app.models.llm_schemas import DistillOutput
 log = logging.getLogger("quant_cnbc.distiller")
 
 DISTILL_SYSTEM = (
-    "You are a financial-news analyst. You distill CNBC show transcripts into a "
-    "concise, faithful structured summary. Return ONLY a JSON object with keys: "
-    '"summary" (string, 3-6 sentences of the key market/company points), '
+    "Summarize the following document. Capture all key points and important "
+    "details accurately, omit fluff, and do not invent information that is not "
+    "present in the source. Write a clear, self-contained summary. "
+    "Return ONLY a JSON object with keys: "
+    '"summary" (the summary text), '
     '"key_topics" (array of short strings), and '
-    '"segments" (array of objects with "speaker", "role", and "summary"). '
-    "Do not invent facts that are not in the transcript."
+    '"segments" (array of objects with "speaker", "role", and "summary").'
 )
 
 _REDUCE_SYSTEM = (
-    "You are combining several partial summaries of one CNBC show into a single "
-    "structured summary. Return ONLY the same JSON object shape "
-    '("summary", "key_topics", "segments").'
+    "Combine the following partial summaries of one document into a single "
+    "summary. Capture all key points and important details accurately, omit "
+    "fluff, and do not invent information that is not present in the source. "
+    "Write a clear, self-contained summary. "
+    'Return ONLY the same JSON object shape ("summary", "key_topics", "segments").'
 )
 
 

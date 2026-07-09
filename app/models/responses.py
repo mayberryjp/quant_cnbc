@@ -39,6 +39,7 @@ class DistillationResponse(BaseModel):
 
 
 class TranscriptDetailResponse(TranscriptResponse):
+    raw_text: str | None = None
     distillation: DistillationResponse | None = None
 
 

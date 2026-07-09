@@ -45,6 +45,30 @@ class TestReadApi:
         resp = app_client.get("/transcripts/999", expect_errors=True)
         assert resp.status_int == 404
 
+    def test_get_transcript_detail_returns_raw_text_and_summary(self, app_client, monkeypatch):
+        from app.models.domain import Distillation
+
+        class TRepo(FakeTranscriptRepo):
+            def get_by_id(self, tid):
+                t = _transcript(tid)
+                t.raw_text = ">> Full original transcript text."
+                return t
+
+        class DRepo:
+            def get_current(self, tid):
+                return Distillation(
+                    id=1, transcript_id=tid, model="m1", prompt_version="v1",
+                    summary="Short distilled summary.", key_topics=["apple"], segments=[],
+                    token_usage={"prompt_chars": 41, "completion_chars": 24},
+                )
+
+        monkeypatch.setattr("app.dependencies.transcript_repo", lambda *a, **k: TRepo())
+        monkeypatch.setattr("app.dependencies.distillation_repo", lambda *a, **k: DRepo())
+        resp = app_client.get("/transcripts/1")
+        assert resp.status_int == 200
+        assert resp.json["raw_text"] == ">> Full original transcript text."
+        assert resp.json["distillation"]["summary"] == "Short distilled summary."
+
     def test_list_entities(self, app_client, monkeypatch):
         class R:
             def list(self, **kw):

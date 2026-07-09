@@ -38,6 +38,11 @@ class TestLLMClient:
         data, usage = client.complete_json("sys", "user")
         assert data["summary"] == "x"
         assert usage["total_tokens"] == 42
+        # Character accounting: prompt = len('sys')+len('user'); completion = raw content len.
+        assert usage["prompt_chars"] == 7
+        assert usage["completion_chars"] == len(
+            '```json\n{"summary":"x","key_topics":[],"segments":[]}\n```'
+        )
 
 
 class FakeLLM:
@@ -47,7 +52,9 @@ class FakeLLM:
 
     def complete_json(self, system, user, json_schema=None):
         self.calls += 1
-        return self.responses.pop(0), {"total_tokens": 10}
+        return self.responses.pop(0), {
+            "total_tokens": 10, "prompt_chars": len(system) + len(user), "completion_chars": 5,
+        }
 
 
 class TestDistiller:
@@ -57,6 +64,7 @@ class TestDistiller:
         assert out.summary == "buy AAPL"
         assert llm.calls == 1
         assert usage["total_tokens"] == 10
+        assert usage["completion_chars"] == 5
 
     def test_map_reduce_for_long_text(self):
         llm = FakeLLM([
@@ -69,3 +77,5 @@ class TestDistiller:
         assert out.summary == "combined"   # reduce output
         assert llm.calls == 4              # 3 chunks + 1 reduce
         assert usage["total_tokens"] == 40
+        # completion_chars summed across all 4 calls (5 each).
+        assert usage["completion_chars"] == 20
