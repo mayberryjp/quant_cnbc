@@ -12,6 +12,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from html import unescape
 
 import httpx
 
@@ -20,6 +21,12 @@ _CAPTION_SUFFIXES = (".srt", ".vtt", ".cc5.txt", ".cc1.txt", ".closedcaptions.tx
 _TIMECODE = re.compile(r"-->")
 _SEQ_ONLY = re.compile(r"^\d+$")
 _SRT_TS = re.compile(r"^\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->")
+
+# Item details page: each broadcast minute is a <div class="snipin ..."> holding
+# the caption text. This text renders publicly even when the caption *files*
+# (.cc5.txt, .srt, ...) are flagged private on the item metadata.
+_SNIPPET = re.compile(r'<div class="snipin[^"]*"[^>]*>(.*?)</div>', re.DOTALL)
+_TAG = re.compile(r"<[^>]+>")
 
 
 @dataclass
@@ -74,6 +81,22 @@ def normalize_caption(text: str) -> str:
             continue
         lines.append(line)
     return re.sub(r"\s+", " ", " ".join(lines)).strip()
+
+
+def parse_page_transcript(html: str) -> str:
+    """Extract the caption transcript from an item ``/details/`` page.
+
+    Concatenates the text of every per-minute ``snipin`` block, strips inline
+    HTML tags, unescapes entities and collapses whitespace. ``>>`` speaker
+    markers are preserved as turn boundaries.
+    """
+    parts: list[str] = []
+    for m in _SNIPPET.finditer(html):
+        text = unescape(_TAG.sub(" ", m.group(1)))
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            parts.append(text)
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()
 
 
 def content_hash(text: str) -> str:
@@ -159,6 +182,13 @@ class ArchiveClient:
         resp = self._client.get(f"{self.base_url}/download/{identifier}/{filename}")
         resp.raise_for_status()
         return resp.text
+
+    def fetch_page_transcript(self, identifier: str) -> str:
+        """Fetch the item details page and extract its inline caption transcript."""
+        self._throttle()
+        resp = self._client.get(f"{self.base_url}/details/{identifier}")
+        resp.raise_for_status()
+        return parse_page_transcript(resp.text)
 
     def close(self) -> None:
         self._client.close()

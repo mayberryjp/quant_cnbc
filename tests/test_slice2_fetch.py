@@ -13,6 +13,7 @@ from app.services.archive_client import (
     content_hash,
     normalize_caption,
     parse_identifier,
+    parse_page_transcript,
     pick_caption_file,
 )
 from app.services.transcript_fetcher import discover_new_items, fetch_transcript
@@ -24,6 +25,27 @@ Jim Cramer says buy Apple.
 2
 00:00:04,000 --> 00:00:07,000
 Nvidia is the AI leader.
+"""
+
+# Minimal slice of an archive.org item /details/ page: two per-minute snipin
+# blocks holding the caption text (as the site renders it publicly).
+DETAILS_HTML = """
+<html><body>
+  <div class="tvcol" data-idx="0">
+    <div class="snippet">
+      <div class="snipin  nosel" unselectable="on">
+        &gt;&gt; Jim Cramer says buy Apple.
+      </div>
+    </div>
+  </div>
+  <div class="tvcol" data-idx="1">
+    <div class="snippet">
+      <div class="snipin  nosel" unselectable="on">
+        Nvidia is the AI leader.
+      </div>
+    </div>
+  </div>
+</body></html>
 """
 
 
@@ -45,6 +67,13 @@ class TestParsing:
     def test_pick_caption_prefers_srt(self):
         files = [{"name": "x.mp4"}, {"name": "show.djvu.txt"}, {"name": "show.srt"}]
         assert pick_caption_file(files) == "show.srt"
+
+    def test_parse_page_transcript(self):
+        text = parse_page_transcript(DETAILS_HTML)
+        assert text == ">> Jim Cramer says buy Apple. Nvidia is the AI leader."
+
+    def test_parse_page_transcript_empty(self):
+        assert parse_page_transcript("<html><body>no snippets</body></html>") == ""
 
     def test_content_hash_stable(self):
         assert content_hash("abc") == content_hash("abc")
@@ -152,13 +181,8 @@ class TestDiscoveryAndFetch:
     @respx.mock
     def test_fetch_transcript_downloads_and_normalizes(self):
         aid = "CNBC_20260702_220000_Mad_Money"
-        respx.get(f"https://archive.org/metadata/{aid}").mock(
-            return_value=httpx.Response(200, json={"files": [
-                {"name": "video.mp4"}, {"name": f"{aid}.srt", "format": "SubRip"},
-            ]})
-        )
-        respx.get(f"https://archive.org/download/{aid}/{aid}.srt").mock(
-            return_value=httpx.Response(200, text=SRT)
+        respx.get(f"https://archive.org/details/{aid}").mock(
+            return_value=httpx.Response(200, text=DETAILS_HTML)
         )
         client = ArchiveClient(rate_limit=0)
         trepo = FakeTranscriptRepo()
@@ -173,13 +197,14 @@ class TestDiscoveryAndFetch:
         assert fetch_transcript(client, trepo, t) is True
         row = trepo.items[aid]
         assert row["status"] == "fetched"
+        assert row["caption_file"] == "item-page"
         assert "Jim Cramer says buy Apple." in row["raw_text"]
 
     @respx.mock
     def test_fetch_transcript_no_caption(self):
         aid = "CNBC_20260702_220000_Mad_Money"
-        respx.get(f"https://archive.org/metadata/{aid}").mock(
-            return_value=httpx.Response(200, json={"files": [{"name": "video.mp4"}]})
+        respx.get(f"https://archive.org/details/{aid}").mock(
+            return_value=httpx.Response(200, text="<html><body>no transcript</body></html>")
         )
         client = ArchiveClient(rate_limit=0)
         trepo = FakeTranscriptRepo()

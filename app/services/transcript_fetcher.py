@@ -6,12 +6,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from app.services.archive_client import (
-    ArchiveClient,
-    content_hash,
-    normalize_caption,
-    pick_caption_file,
-)
+from app.services.archive_client import ArchiveClient, content_hash
 
 log = logging.getLogger("quant_cnbc.fetcher")
 
@@ -83,31 +78,27 @@ def discover_new_items(
 
 
 def fetch_transcript(client: ArchiveClient, transcript_repo, transcript) -> bool:
-    """Download + normalize a transcript's caption; mark it ``fetched``.
+    """Scrape the item details-page transcript; mark it ``fetched``.
 
-    Returns True on success. Failures are recorded on the row and never raise.
+    The details page renders the closed-caption transcript inline and remains
+    public even when the caption *files* are flagged private on the item. Returns
+    True on success. Failures are recorded on the row and never raise.
     """
     try:
-        files = client.list_files(transcript.archive_identifier)
-        caption = pick_caption_file(files)
-        if not caption:
-            transcript_repo.set_status(
-                transcript.id, "failed",
-                last_error="no caption/transcript file in archive item",
-                bump_attempts=True,
-            )
-            return False
-        raw = client.download_file(transcript.archive_identifier, caption)
-        normalized = normalize_caption(raw)
+        normalized = client.fetch_page_transcript(transcript.archive_identifier)
         if not normalized:
+            log.warning(
+                "fetch failed for %s: item page has no transcript text yet",
+                transcript.archive_identifier,
+            )
             transcript_repo.set_status(
                 transcript.id, "failed",
-                last_error="caption normalized to empty text", bump_attempts=True,
+                last_error="item page has no transcript text", bump_attempts=True,
             )
             return False
         transcript_repo.mark_fetched(
             transcript.id, raw_text=normalized,
-            content_hash=content_hash(normalized), caption_file=caption,
+            content_hash=content_hash(normalized), caption_file="item-page",
         )
         return True
     except Exception as exc:  # network / archive errors — isolate and retry later
