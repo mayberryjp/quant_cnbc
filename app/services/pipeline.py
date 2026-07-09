@@ -29,6 +29,7 @@ class Pipeline:
         model: str, distill_prompt_version: str, sentiment_prompt_version: str,
         entity_prompt_version: str, collection: str = "TV-CNBC", lookback_days: int = 1,
         overlap_hours: int = 24, allowlist: list[str] | None = None, max_attempts: int = 5,
+        distill_max_chunk_chars: int = 6000,
     ) -> None:
         self.transcripts = transcript_repo
         self.distillations = distillation_repo
@@ -48,6 +49,7 @@ class Pipeline:
         self.overlap_hours = overlap_hours
         self.allowlist = allowlist or []
         self.max_attempts = max_attempts
+        self.distill_max_chunk_chars = distill_max_chunk_chars
 
     # -- discovery ---------------------------------------------------------
     def discover(self) -> int:
@@ -77,7 +79,9 @@ class Pipeline:
             if status == TranscriptStatus.fetched:
                 raw = transcript.raw_text or ""
                 log.info("process %s: distilling (%d chars of transcript)", aid, len(raw))
-                out, usage = distiller.distill(self.llm, raw)
+                out, usage = distiller.distill(
+                    self.llm, raw, max_chunk_chars=self.distill_max_chunk_chars
+                )
                 self.distillations.upsert(Distillation(
                     transcript_id=transcript.id, model=self.model,
                     prompt_version=self.distill_pv, summary=out.summary,

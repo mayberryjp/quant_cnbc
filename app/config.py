@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     distill_prompt_version: str = "v4"
     sentiment_prompt_version: str = "v1"
     entity_prompt_version: str = "v1"
+    # Map/reduce chunk size for distillation: transcripts longer than this are
+    # split into chunks (each summarized, then merged). Smaller = more, finer
+    # sections and greater breadth, at the cost of more LLM calls per transcript.
+    distill_max_chunk_chars: int = 6000
 
     # --- Downstream: quant_sentiment ---
     sentiment_api_url: str = "http://localhost:8017/sentiment"

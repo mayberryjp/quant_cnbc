@@ -69,6 +69,7 @@ def build_pipeline(engine=None) -> Pipeline:
         overlap_hours=settings.archive_overlap_hours,
         allowlist=settings.show_allowlist,
         max_attempts=settings.max_attempts,
+        distill_max_chunk_chars=settings.distill_max_chunk_chars,
     )
 
 

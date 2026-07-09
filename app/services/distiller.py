@@ -63,7 +63,7 @@ def _chunks(text: str, size: int) -> list[str]:
 
 
 def distill(
-    llm_client, text: str, *, max_chunk_chars: int = 12000,
+    llm_client, text: str, *, max_chunk_chars: int = 6000,
 ) -> tuple[DistillOutput, dict[str, Any]]:
     """Distill transcript text. Long transcripts are map/reduced.
 
