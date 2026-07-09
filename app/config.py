@@ -52,9 +52,9 @@ class Settings(BaseSettings):
     llm_model: str = "llama3.1:8b"
     llm_api_key: str = ""
     llm_timeout: int = 120
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 8192
     llm_json_mode: bool = True
-    distill_prompt_version: str = "v2"
+    distill_prompt_version: str = "v4"
     sentiment_prompt_version: str = "v1"
     entity_prompt_version: str = "v1"
 
