@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.models.llm_schemas import DistillOutput
@@ -91,6 +92,63 @@ def _iter_strings(value: Any):
             yield from _iter_strings(v)
 
 
+_HEADING = re.compile(r"^\s*(?:\d+\.\s+)?\*\*(.+?)\*\*\s*:?\s*$", re.MULTILINE)
+
+
+def _dedupe_preserve(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        key = item.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item.strip())
+    return out
+
+
+def _topics_from_summary(summary: str) -> list[str]:
+    return _dedupe_preserve([m.group(1).strip() for m in _HEADING.finditer(summary or "")])
+
+
+def _is_thin_reduce_output(
+    *, reduced: DistillOutput, partials: list[DistillOutput], total_partial_chars: int,
+) -> bool:
+    """Detect when reduce collapses a long transcript into an unusably thin result."""
+    partial_topic_count = sum(1 for p in partials if p.key_topics)
+    partial_segment_count = sum(1 for p in partials if p.segments)
+    reduced_chars = len((reduced.summary or "").strip())
+    # For long inputs we expect the merged result to retain meaningful depth.
+    # A very short summary or complete loss of structure is a bad reduce output.
+    if reduced_chars < max(400, int(total_partial_chars * 0.15)):
+        return True
+    if (not reduced.key_topics and partial_topic_count > 0) or (
+        not reduced.segments and partial_segment_count > 0
+    ):
+        return True
+    return False
+
+
+def _fallback_from_partials(partials: list[DistillOutput]) -> DistillOutput:
+    """Build a safe merged output from map-stage results when reduce under-delivers."""
+    merged_summary = "\n\n".join(
+        f"### Chunk {idx}\n{(p.summary or '').strip()}" for idx, p in enumerate(partials, 1)
+    ).strip()
+
+    topics = _dedupe_preserve(
+        [topic for p in partials for topic in (p.key_topics or [])]
+    )
+    if not topics:
+        topics = _topics_from_summary(merged_summary)
+
+    # Keep order and cap runaway growth for very long transcripts.
+    segments = [
+        s.model_dump() for p in partials for s in (p.segments or [])
+    ][:200]
+
+    return DistillOutput(summary=merged_summary, key_topics=topics, segments=segments)
+
+
 def _coerce_distill(data: Any) -> dict[str, Any]:
     """Normalize varied model output into the ``DistillOutput`` dict shape.
 
@@ -154,19 +212,33 @@ def distill(
     # Map: summarize each chunk, then reduce the concatenation.
     chunks = _chunks(text, max_chunk_chars)
     log.info("distill: map/reduce over %d chunks (%d chars total)", len(chunks), len(text))
-    partials: list[str] = []
+    partials: list[DistillOutput] = []
     total_usage: dict[str, Any] = {}
     for idx, chunk in enumerate(chunks, 1):
         log.info("distill: mapping chunk %d/%d (%d chars)", idx, len(chunks), len(chunk))
         data, usage = llm_client.complete_json(DISTILL_SYSTEM, _user_prompt(chunk))
-        partials.append(DistillOutput.model_validate(_coerce_distill(data)).summary)
+        partials.append(DistillOutput.model_validate(_coerce_distill(data)))
         _merge_usage(total_usage, usage)
 
     log.info("distill: reducing %d partial summaries", len(partials))
-    combined = "\n\n".join(f"- {p}" for p in partials)
+    combined = "\n\n".join(
+        f"### Chunk {idx}\n{(p.summary or '').strip()}" for idx, p in enumerate(partials, 1)
+    )
     data, usage = llm_client.complete_json(_REDUCE_SYSTEM, _user_prompt(combined))
     _merge_usage(total_usage, usage)
-    return DistillOutput.model_validate(_coerce_distill(data)), total_usage
+    reduced = DistillOutput.model_validate(_coerce_distill(data))
+    total_partial_chars = sum(len((p.summary or "").strip()) for p in partials)
+    if _is_thin_reduce_output(
+        reduced=reduced, partials=partials, total_partial_chars=total_partial_chars
+    ):
+        log.warning(
+            "distill: reduce output looked too thin; using map-stage merged fallback "
+            "(reduce_summary_chars=%d, partial_chars=%d, topics=%d, segments=%d)",
+            len((reduced.summary or "").strip()), total_partial_chars,
+            len(reduced.key_topics), len(reduced.segments),
+        )
+        reduced = _fallback_from_partials(partials)
+    return reduced, total_usage
 
 
 def _merge_usage(acc: dict[str, Any], usage: dict[str, Any]) -> None:

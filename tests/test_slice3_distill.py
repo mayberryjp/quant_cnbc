@@ -95,3 +95,30 @@ class TestDistiller:
         llm = FakeLLM([{"markdown": "**Summary**\n- point", "key_topics": [], "segments": []}])
         out, _ = distill(llm, "short transcript")
         assert out.summary == "**Summary**\n- point"
+
+    def test_map_reduce_falls_back_when_reduce_is_too_thin(self):
+        llm = FakeLLM([
+            {
+                "summary": "**Chunk 1**\n1. **AI**:\n   - **Spending**: capex remained strong.",
+                "key_topics": ["AI"],
+                "segments": [{"speaker": "Host", "role": "anchor", "summary": "AI capex discussion"}],
+            },
+            {
+                "summary": "**Chunk 2**\n1. **Semis**:\n   - **Samsung**: results and valuation debate.",
+                "key_topics": ["Semis"],
+                "segments": [{"speaker": "Guest", "role": "analyst", "summary": "Semiconductor outlook"}],
+            },
+            {
+                # Simulate bad reduce collapse: one line + empty structure.
+                "summary": "Cheaper models challenge expensive AI incumbents.",
+                "key_topics": [],
+                "segments": [],
+            },
+        ])
+        out, usage = distill(llm, "x" * 25, max_chunk_chars=13)
+        assert "Chunk 1" in out.summary
+        assert "Chunk 2" in out.summary
+        assert out.key_topics == ["AI", "Semis"]
+        assert len(out.segments) == 2
+        assert llm.calls == 3  # 2 chunks + 1 reduce
+        assert usage["total_tokens"] == 30
