@@ -33,13 +33,29 @@ _SUMMARY_FORMAT = (
     + _DEPTH
 )
 
+_JSON_CONTRACT = (
+    " OUTPUT FORMAT — follow EXACTLY:\n"
+    "Return ONLY a single JSON object with these THREE top-level keys and NOTHING else:\n"
+    '  "summary": string  — the Markdown summary described above,\n'
+    '  "key_topics": array of short strings — one per numbered section/topic,\n'
+    '  "segments": array of objects, each with "speaker", "role", and "summary".\n'
+    "HARD RULES:\n"
+    '- The three keys "summary", "key_topics", and "segments" MUST be at the ROOT of the object.\n'
+    "- Do NOT wrap the object inside another key. Do NOT use the show name, date, or a title as a "
+    "key. The title belongs INSIDE the \"summary\" string, never as a JSON key.\n"
+    '- Do NOT nest the object under keys like "result", "output", "data", "document", or "response".\n'
+    '- "summary" MUST be a plain string, not an object or array.\n'
+    "- Do NOT add any keys other than the three specified.\n"
+    "- Return raw JSON only: no prose, no explanation, and no Markdown code fences.\n"
+    'Example of the REQUIRED shape: '
+    '{"summary": "**CNBC ... Summary**\\n1. **Topic**: ...", "key_topics": ["Topic"], '
+    '"segments": [{"speaker": "Host", "role": "anchor", "summary": "..."}]}'
+)
+
 DISTILL_SYSTEM = (
     "Summarize the following document into a thorough, self-contained, DETAILED summary. "
     + _SUMMARY_FORMAT
-    + " Return ONLY a JSON object with keys: "
-    '"summary" (the Markdown summary described above), '
-    '"key_topics" (array of short strings — one per numbered section/topic), and '
-    '"segments" (array of objects with "speaker", "role", and "summary").'
+    + _JSON_CONTRACT
 )
 
 _REDUCE_SYSTEM = (
@@ -50,7 +66,7 @@ _REDUCE_SYSTEM = (
     "not compress or shorten. The result must be at least as long and detailed as the parts combined. "
     "Order sections as the document progressed. "
     + _SUMMARY_FORMAT
-    + ' Return ONLY the same JSON object shape ("summary", "key_topics", "segments").'
+    + _JSON_CONTRACT
 )
 
 
@@ -60,6 +76,67 @@ def _user_prompt(text: str) -> str:
 
 def _chunks(text: str, size: int) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _iter_strings(value: Any):
+    """Yield every non-empty string leaf inside a nested dict/list/str value."""
+    if isinstance(value, str):
+        if value.strip():
+            yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _iter_strings(v)
+
+
+def _coerce_distill(data: Any) -> dict[str, Any]:
+    """Normalize varied model output into the ``DistillOutput`` dict shape.
+
+    Local models (e.g. phi4) occasionally deviate from the requested schema:
+    wrapping the object under a title key, using an alternate key for the
+    Markdown body, or nesting the payload one level deep. This recovers a usable
+    ``summary`` string so a single non-conforming call doesn't fail the whole
+    transcript. Well-formed output passes through unchanged.
+    """
+    if isinstance(data, dict) and isinstance(data.get("summary"), str) and data["summary"].strip():
+        return data
+
+    log.warning("distill: model output missing a valid 'summary'; attempting to recover shape")
+
+    if isinstance(data, str):
+        return {"summary": data}
+    if not isinstance(data, dict):
+        return {"summary": str(data)}
+
+    # Payload nested under a single wrapper key, e.g. {"<title>": {"summary": ...}}.
+    if len(data) == 1:
+        inner = next(iter(data.values()))
+        if isinstance(inner, dict):
+            coerced = _coerce_distill(inner)
+            if coerced.get("summary"):
+                return coerced
+        if isinstance(inner, str) and inner.strip():
+            return {"summary": inner}
+
+    # Alternate key names for the Markdown body.
+    for alt in ("markdown", "document", "content", "text", "body", "summary_markdown"):
+        if isinstance(data.get(alt), str) and data[alt].strip():
+            return {**data, "summary": data[alt]}
+
+    # A non-string summary (dict/list): flatten its string content.
+    if data.get("summary") is not None:
+        joined = "\n\n".join(_iter_strings(data["summary"]))
+        if joined.strip():
+            return {**data, "summary": joined}
+
+    # Last resort: use the longest string found anywhere in the payload.
+    candidates = list(_iter_strings(data))
+    if candidates:
+        return {**data, "summary": max(candidates, key=len)}
+
+    return data if isinstance(data, dict) else {"summary": str(data)}
 
 
 def distill(
@@ -72,7 +149,7 @@ def distill(
     if len(text) <= max_chunk_chars:
         log.info("distill: single-shot over %d chars", len(text))
         data, usage = llm_client.complete_json(DISTILL_SYSTEM, _user_prompt(text))
-        return DistillOutput.model_validate(data), usage
+        return DistillOutput.model_validate(_coerce_distill(data)), usage
 
     # Map: summarize each chunk, then reduce the concatenation.
     chunks = _chunks(text, max_chunk_chars)
@@ -82,14 +159,14 @@ def distill(
     for idx, chunk in enumerate(chunks, 1):
         log.info("distill: mapping chunk %d/%d (%d chars)", idx, len(chunks), len(chunk))
         data, usage = llm_client.complete_json(DISTILL_SYSTEM, _user_prompt(chunk))
-        partials.append(DistillOutput.model_validate(data).summary)
+        partials.append(DistillOutput.model_validate(_coerce_distill(data)).summary)
         _merge_usage(total_usage, usage)
 
     log.info("distill: reducing %d partial summaries", len(partials))
     combined = "\n\n".join(f"- {p}" for p in partials)
     data, usage = llm_client.complete_json(_REDUCE_SYSTEM, _user_prompt(combined))
     _merge_usage(total_usage, usage)
-    return DistillOutput.model_validate(data), total_usage
+    return DistillOutput.model_validate(_coerce_distill(data)), total_usage
 
 
 def _merge_usage(acc: dict[str, Any], usage: dict[str, Any]) -> None:

@@ -79,3 +79,19 @@ class TestDistiller:
         assert usage["total_tokens"] == 40
         # completion_chars summed across all 4 calls (5 each).
         assert usage["completion_chars"] == 20
+
+    def test_recovers_when_summary_wrapped_under_title_key(self):
+        # phi4-style deviation: whole object nested under a single title key.
+        llm = FakeLLM([{
+            "CNBC Fast Money Transcript Summary (July 9, 2026)": {
+                "summary": "buy NVDA", "key_topics": ["nvidia"], "segments": [],
+            }
+        }])
+        out, _ = distill(llm, "short transcript")
+        assert out.summary == "buy NVDA"
+        assert out.key_topics == ["nvidia"]
+
+    def test_recovers_from_alternate_markdown_key(self):
+        llm = FakeLLM([{"markdown": "**Summary**\n- point", "key_topics": [], "segments": []}])
+        out, _ = distill(llm, "short transcript")
+        assert out.summary == "**Summary**\n- point"
