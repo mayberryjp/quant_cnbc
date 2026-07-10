@@ -29,6 +29,7 @@ class TranscriptResponse(BaseModel):
     segment_count: int | None = None
     sentiment_count: int | None = None
     entity_count: int | None = None
+    summary: str | None = None
 
 
 class DistillationResponse(BaseModel):

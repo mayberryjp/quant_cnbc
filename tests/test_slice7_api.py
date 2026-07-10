@@ -35,11 +35,25 @@ class FakeTranscriptRepo:
 
 class TestReadApi:
     def test_list_transcripts(self, app_client, monkeypatch):
+        from app.models.domain import Distillation
+
+        class DRepo:
+            def get_current_map(self, tids):
+                return {
+                    tid: Distillation(
+                        id=1, transcript_id=tid, model="m1", prompt_version="v1",
+                        summary="Short distilled summary.", key_topics=[], segments=[],
+                    )
+                    for tid in tids
+                }
+
         monkeypatch.setattr("app.dependencies.transcript_repo", lambda *a, **k: FakeTranscriptRepo())
+        monkeypatch.setattr("app.dependencies.distillation_repo", lambda *a, **k: DRepo())
         resp = app_client.get("/transcripts?status=done")
         assert resp.status_int == 200
         assert resp.json["total"] == 1
         assert resp.json["items"][0]["archive_identifier"] == "CNBC_20260702_220000_Mad_Money"
+        assert resp.json["items"][0]["summary"] == "Short distilled summary."
 
     def test_get_transcript_404(self, app_client, monkeypatch):
         monkeypatch.setattr("app.dependencies.transcript_repo", lambda *a, **k: FakeTranscriptRepo())

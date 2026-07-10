@@ -47,8 +47,15 @@ def list_transcripts():
         to_date=request.params.get("to_date"),
         page=page, page_size=page_size,
     )
+    summaries = deps.distillation_repo().get_current_map([t.id for t in items])
     return {
-        "items": [TranscriptResponse(**t.model_dump()).model_dump(mode="json") for t in items],
+        "items": [
+            TranscriptResponse(
+                **t.model_dump(),
+                summary=(summaries[t.id].summary if t.id in summaries else None),
+            ).model_dump(mode="json")
+            for t in items
+        ],
         "total": total, "page": page, "page_size": page_size,
     }
 
@@ -62,6 +69,7 @@ def get_transcript(transcript_id: int):
     current = deps.distillation_repo().get_current(transcript_id)
     detail = TranscriptDetailResponse(
         **t.model_dump(),
+        summary=(current.summary if current else None),
         distillation=(DistillationResponse(**current.model_dump()) if current else None),
     )
     return detail.model_dump(mode="json")

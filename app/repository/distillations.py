@@ -76,3 +76,15 @@ class DistillationRepository:
         with self.engine.connect() as conn:
             row = conn.execute(sql, {"tid": transcript_id}).mappings().first()
         return _row_to_distillation(row) if row else None
+
+    def get_current_map(self, transcript_ids: list[int]) -> dict[int, Distillation]:
+        """Return {transcript_id: current Distillation} for the given ids in one query."""
+        if not transcript_ids:
+            return {}
+        sql = text(
+            f"SELECT {_COLUMNS} FROM cnbc.distillations "
+            "WHERE transcript_id = ANY(:tids) AND is_current"
+        )
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, {"tids": list(transcript_ids)}).mappings().all()
+        return {row["transcript_id"]: _row_to_distillation(row) for row in rows}
