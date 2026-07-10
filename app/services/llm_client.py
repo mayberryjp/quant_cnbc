@@ -43,13 +43,15 @@ def parse_json(content: str) -> dict[str, Any]:
 class LLMClient:
     def __init__(
         self, *, base_url: str, model: str, api_key: str = "", timeout: int = 120,
-        max_tokens: int = 2048, json_mode: bool = True, client: httpx.Client | None = None,
+        max_tokens: int = 2048, json_mode: bool = True, num_ctx: int | None = None,
+        client: httpx.Client | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.max_tokens = max_tokens
         self.json_mode = json_mode
+        self.num_ctx = num_ctx
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -68,6 +70,9 @@ class LLMClient:
             "temperature": 0,
             "max_tokens": self.max_tokens,
         }
+        if self.num_ctx is not None:
+            # Ollama-specific: request a larger context window for this call.
+            payload["options"] = {"num_ctx": self.num_ctx}
         if json_schema is not None:
             payload["response_format"] = {"type": "json_schema", "json_schema": json_schema}
         elif self.json_mode:

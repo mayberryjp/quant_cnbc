@@ -48,6 +48,7 @@ def build_pipeline(engine=None) -> Pipeline:
             base_url=settings.llm_base_url, model=settings.llm_model,
             api_key=settings.llm_api_key, timeout=settings.llm_timeout,
             max_tokens=settings.llm_max_tokens, json_mode=settings.llm_json_mode,
+            num_ctx=settings.llm_num_ctx,
         ),
         sentiment_api=SentimentApiClient(
             url=settings.sentiment_api_url, api_key=settings.sentiment_api_key,

@@ -55,15 +55,21 @@ class Settings(BaseSettings):
     llm_model: str = "llama3.1:8b"
     llm_api_key: str = ""
     llm_timeout: int = 120
-    llm_max_tokens: int = 8192
+    # Total context window (prompt + completion) requested from Ollama via
+    # options.num_ctx. Must fit input chunk + system prompt + llm_max_tokens.
+    llm_num_ctx: int = 8192
+    # Max completion tokens carved out of llm_num_ctx for the model's output.
+    llm_max_tokens: int = 4096
     llm_json_mode: bool = True
-    distill_prompt_version: str = "v4"
+    distill_prompt_version: str = "v5"
     sentiment_prompt_version: str = "v1"
     entity_prompt_version: str = "v1"
     # Map/reduce chunk size for distillation: transcripts longer than this are
     # split into chunks (each summarized, then merged). Smaller = more, finer
     # sections and greater breadth, at the cost of more LLM calls per transcript.
-    distill_max_chunk_chars: int = 6000
+    # Sized to fit llm_num_ctx: ~12000 chars ≈ 3000 input tokens, leaving room
+    # for the ~900-token system prompt and llm_max_tokens of completion.
+    distill_max_chunk_chars: int = 12000
 
     # --- Downstream: quant_sentiment ---
     sentiment_api_url: str = "http://localhost:8017/sentiment"
