@@ -170,6 +170,30 @@ class TranscriptRepository:
         with self.engine.begin() as conn:
             return (conn.execute(sql, {"id": transcript_id}).rowcount or 0) > 0
 
+    def delete(self, transcript_id: int) -> bool:
+        """Hard-delete a transcript and every derived row.
+
+        The child tables (distillations, sentiments, referenced_entities) carry
+        a NOT NULL foreign key to transcripts with no ON DELETE CASCADE, so they
+        are removed first inside the same transaction. Returns whether a
+        transcript row actually existed.
+        """
+        with self.engine.begin() as conn:
+            for table in (
+                "cnbc.distillations",
+                "cnbc.sentiments",
+                "cnbc.referenced_entities",
+            ):
+                conn.execute(
+                    text(f"DELETE FROM {table} WHERE transcript_id = :id"),
+                    {"id": transcript_id},
+                )
+            result = conn.execute(
+                text("DELETE FROM cnbc.transcripts WHERE id = :id"),
+                {"id": transcript_id},
+            )
+            return (result.rowcount or 0) > 0
+
     # -- selection ---------------------------------------------------------
     def list_actionable(self, *, limit: int = 100, max_attempts: int = 5) -> list[Transcript]:
         sql = text(

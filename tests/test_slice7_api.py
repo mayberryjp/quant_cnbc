@@ -32,6 +32,13 @@ class FakeTranscriptRepo:
     def get_by_identifier(self, aid):
         return _transcript() if aid == "CNBC_20260702_220000_Mad_Money" else None
 
+    def delete(self, tid):
+        self.deleted = getattr(self, "deleted", [])
+        if tid in (1, 2):
+            self.deleted.append(tid)
+            return True
+        return False
+
 
 class TestReadApi:
     def test_list_transcripts(self, app_client, monkeypatch):
@@ -108,6 +115,21 @@ class TestReadApi:
         resp = app_client.get("/sentiments?subject=AAPL")
         assert resp.status_int == 200
         assert resp.json["items"][0]["subject"] == "AAPL"
+
+
+class TestDeleteEndpoint:
+    def test_delete_transcript(self, app_client, monkeypatch):
+        fake = FakeTranscriptRepo()
+        monkeypatch.setattr("app.dependencies.transcript_repo", lambda *a, **k: fake)
+        resp = app_client.delete("/transcripts/1")
+        assert resp.status_int == 200
+        assert resp.json == {"status": "deleted", "id": 1}
+        assert fake.deleted == [1]
+
+    def test_delete_transcript_404(self, app_client, monkeypatch):
+        monkeypatch.setattr("app.dependencies.transcript_repo", lambda *a, **k: FakeTranscriptRepo())
+        resp = app_client.delete("/transcripts/999", expect_errors=True)
+        assert resp.status_int == 404
 
 
 class TestReadiness:

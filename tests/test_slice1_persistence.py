@@ -96,6 +96,46 @@ class TestRepositories:
         assert t2.status == TranscriptStatus.fetched
         assert t2.raw_text == "hello world"
 
+    def test_delete_removes_transcript_and_children(self, clean_db):
+        from sqlalchemy import text
+
+        from app.repository.distillations import DistillationRepository
+        from app.repository.entities import EntityRepository
+        from app.repository.sentiments import SentimentRepository
+        from app.repository.transcripts import TranscriptRepository
+
+        repo = TranscriptRepository(clean_db)
+        repo.upsert_discovered([_make_transcript()])
+        t = repo.get_by_identifier("CNBC_20260702_220000_Mad_Money")
+
+        DistillationRepository(clean_db).upsert(
+            Distillation(transcript_id=t.id, model="m1", prompt_version="v1", summary="s")
+        )
+        SentimentRepository(clean_db).insert(
+            Sentiment(
+                transcript_id=t.id, subject="AAPL", sentiment_label="bullish",
+                model="m1", prompt_version="v1", idempotency_key="cnbc:x:AAPL",
+            )
+        )
+        EntityRepository(clean_db).insert(
+            ReferencedEntity(
+                transcript_id=t.id, raw_mention="Apple", entity_type="company",
+                ticker="AAPL", model="m1", prompt_version="v1", idempotency_key="cnbc:x:AAPL:e",
+            )
+        )
+
+        assert repo.delete(t.id) is True         # deletes transcript + all children
+        assert repo.get_by_id(t.id) is None
+        assert repo.delete(t.id) is False        # already gone -> no row
+
+        with clean_db.connect() as conn:
+            for table in ("distillations", "sentiments", "referenced_entities"):
+                remaining = conn.execute(
+                    text(f"SELECT count(*) FROM cnbc.{table} WHERE transcript_id = :id"),
+                    {"id": t.id},
+                ).scalar_one()
+                assert remaining == 0
+
     def test_distillation_versioning(self, clean_db):
         from app.repository.distillations import DistillationRepository
         from app.repository.transcripts import TranscriptRepository

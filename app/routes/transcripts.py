@@ -75,6 +75,14 @@ def get_transcript(transcript_id: int):
     return detail.model_dump(mode="json")
 
 
+@sub.delete("/transcripts/<transcript_id:int>")
+def delete_transcript(transcript_id: int):
+    repo = deps.transcript_repo()
+    if not repo.delete(transcript_id):
+        raise _json_error(404, "Transcript not found")
+    return {"status": "deleted", "id": transcript_id}
+
+
 @sub.post("/transcripts/<archive_identifier:path>/reprocess")
 def reprocess_one(archive_identifier: str):
     from app.services.ingest_worker import build_pipeline
