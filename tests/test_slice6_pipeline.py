@@ -11,7 +11,7 @@ from app.models.domain import (
     TranscriptStatus,
     WatchlistStatus,
 )
-from app.services.ingest_worker import seconds_until_wake
+from app.services.ingest_worker import next_failed_retry_at, seconds_until_wake
 from app.services.pipeline import Pipeline
 
 
@@ -61,7 +61,7 @@ class FakeTranscriptRepo:
         t.caption_file = caption_file
         t.status = TranscriptStatus.fetched
 
-    def list_actionable(self, *, limit=200, max_attempts=5):
+    def list_actionable(self, *, limit=200, max_attempts=5, include_failed=True):
         return list(self._by_id.values())
 
 
@@ -225,3 +225,8 @@ class TestWakeTiming:
     def test_seconds_until_wake_next_day(self):
         now = datetime(2026, 7, 4, 7, 0, 0)
         assert seconds_until_wake("06:00", now) == 23 * 3600
+
+    def test_next_failed_retry_at(self):
+        now = datetime(2026, 7, 4, 7, 0, 0)
+        assert next_failed_retry_at(6, now) == datetime(2026, 7, 4, 13, 0, 0)
+        assert next_failed_retry_at(0, now) is None

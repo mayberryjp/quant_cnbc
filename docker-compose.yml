@@ -10,6 +10,7 @@ services:
       - API_PORT=8019
       - CNBC_INGEST_WAKE_TIME=06:00
       - CNBC_INGEST_INTERVAL_HOURS=4
+      - CNBC_FAILED_RETRY_INTERVAL_HOURS=6
       - CNBC_ARCHIVE_COLLECTION=TV-CNBC
       - CNBC_LLM_BASE_URL=http://host.docker.internal:11434/v1
       - CNBC_LLM_MODEL=llama3.1:8b

@@ -195,12 +195,19 @@ class TranscriptRepository:
             return (result.rowcount or 0) > 0
 
     # -- selection ---------------------------------------------------------
-    def list_actionable(self, *, limit: int = 100, max_attempts: int = 5) -> list[Transcript]:
+    def list_actionable(
+        self, *, limit: int = 100, max_attempts: int = 5, include_failed: bool = True
+    ) -> list[Transcript]:
+        failed_clause = (
+            " OR (status = 'failed' AND attempts < :max_attempts)"
+            if include_failed
+            else ""
+        )
         sql = text(
             f"""
             SELECT {_COLUMNS}, raw_text FROM cnbc.transcripts
              WHERE status IN ('discovered','fetched','distilled')
-                OR (status = 'failed' AND attempts < :max_attempts)
+                {failed_clause}
              ORDER BY broadcast_start NULLS LAST, id
              LIMIT :limit
             """

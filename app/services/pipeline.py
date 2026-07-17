@@ -165,7 +165,9 @@ class Pipeline:
         totals: Counter = Counter()
         try:
             self.discover()
-            actionable = self.transcripts.list_actionable(limit=limit, max_attempts=self.max_attempts)
+            actionable = self.transcripts.list_actionable(
+                limit=limit, max_attempts=self.max_attempts, include_failed=False
+            )
             log.info("run: %d actionable item(s) to process", len(actionable))
             for i, t in enumerate(actionable, 1):
                 log.info("run: [%d/%d] %s", i, len(actionable), t.archive_identifier)

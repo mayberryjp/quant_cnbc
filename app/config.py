@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     http_retries: int = 3
     retry_backoff: float = 1.0               # base seconds for exponential backoff
     max_attempts: int = 5                    # per-item processing retry cap
+    # Retry transcripts in the failed state on a separate cadence so transient
+    # upstream gaps (e.g. archive transcript not yet published) can heal.
+    failed_retry_interval_hours: float = 6.0
 
     # --- Validation limits / paging ---
     max_reason_length: int = 2000

@@ -54,3 +54,7 @@ Outputs are **version-scoped** by model + prompt version, so transcripts can be
 
 Copy `.env.example` to `.env` and adjust. CNBC-specific settings use the `CNBC_`
 prefix; `DATABASE_URL` / `API_PORT` are read unprefixed.
+
+By default, failed transcripts are retried in a separate sweep every 6 hours
+(`CNBC_FAILED_RETRY_INTERVAL_HOURS=6`). Set this to `0` to disable periodic
+failed-item sweeps.

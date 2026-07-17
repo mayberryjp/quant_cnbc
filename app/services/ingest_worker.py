@@ -87,6 +87,19 @@ def seconds_until_wake(wake_time: str, now: datetime | None = None) -> float:
     return (target - now).total_seconds()
 
 
+def next_failed_retry_at(
+    interval_hours: float, now: datetime | None = None
+) -> datetime | None:
+    """Return when the next failed-retry sweep should run.
+
+    If ``interval_hours`` is <= 0, failed-retry sweeps are disabled.
+    """
+    if interval_hours <= 0:
+        return None
+    now = now or datetime.now()
+    return now + timedelta(hours=interval_hours)
+
+
 def _restart_all(pipeline: Pipeline, args) -> int:
     """Fully restart every transcript matching the filters (re-fetch + all passes)."""
     candidates = pipeline.transcripts.restart_candidates(
@@ -204,12 +217,30 @@ def run_worker(argv: list[str] | None = None) -> None:
         logger.info("ingest worker starting (interval=%gh)", args.interval_hours)
     else:
         logger.info("ingest worker starting (wake-time=%s)", args.wake_time)
+    retry_interval = settings.failed_retry_interval_hours
+    retry_due_at = next_failed_retry_at(0.0)  # None if disabled; set below when enabled.
+    if retry_interval > 0:
+        retry_due_at = datetime.now()  # run an initial sweep, then cadence every N hours
+        logger.info(
+            "failed-retry sweep enabled (interval=%gh)",
+            retry_interval,
+        )
+    else:
+        logger.info("failed-retry sweep disabled")
     while True:
         try:
             totals = pipeline.run(args.date)
             logger.info("run complete: %s", dict(totals))
         except Exception:
             logger.exception("run cycle failed - will retry next cycle")
+        now = datetime.now()
+        if retry_due_at is not None and now >= retry_due_at:
+            try:
+                retry_totals = pipeline.retry_failed(max_attempts=settings.max_attempts)
+                logger.info("retry-failed sweep complete: %s", dict(retry_totals))
+            except Exception:
+                logger.exception("retry-failed sweep failed")
+            retry_due_at = next_failed_retry_at(retry_interval)
         if interval_mode:
             time.sleep(args.interval_hours * 3600)
         else:
