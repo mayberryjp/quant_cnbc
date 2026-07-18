@@ -35,11 +35,27 @@ class FakeTranscriptRepo:
         self._by_id[t.id] = t
         return t
 
+    def add_failed(self, aid: str, attempts: int) -> Transcript:
+        self._seq += 1
+        t = Transcript(
+            id=self._seq, archive_identifier=aid, show_slug="Mad_Money",
+            air_date=date(2026, 7, 2),
+            broadcast_start=datetime(2026, 7, 2, 22, 0, tzinfo=timezone.utc),
+            source_url=f"https://archive.org/details/{aid}", raw_text="stale text",
+            status=TranscriptStatus.failed, attempts=attempts,
+        )
+        self._by_id[t.id] = t
+        return t
+
     def get_by_id(self, tid):
         return self._by_id.get(tid)
 
     def set_status(self, tid, status, last_error=None, bump_attempts=False):
-        self._by_id[tid].status = TranscriptStatus(status) if isinstance(status, str) else status
+        t = self._by_id[tid]
+        t.status = TranscriptStatus(status) if isinstance(status, str) else status
+        t.last_error = last_error
+        if bump_attempts:
+            t.attempts += 1
 
     def touch_stage(self, tid, stage):
         pass
@@ -52,6 +68,7 @@ class FakeTranscriptRepo:
         t = self._by_id[tid]
         t.status = TranscriptStatus.discovered
         t.raw_text = None
+        t.last_error = None
         return True
 
     def mark_fetched(self, tid, *, raw_text, content_hash, caption_file=None):
@@ -63,6 +80,15 @@ class FakeTranscriptRepo:
 
     def list_actionable(self, *, limit=200, max_attempts=5, include_failed=True):
         return list(self._by_id.values())
+
+    def failed_candidates(self, *, show=None, from_date=None, to_date=None, max_attempts=None):
+        rows = [t for t in self._by_id.values() if t.status == TranscriptStatus.failed]
+        if max_attempts is not None:
+            rows = [t for t in rows if t.attempts < max_attempts]
+        return rows
+
+    def delete(self, tid):
+        return self._by_id.pop(tid, None) is not None
 
 
 class FakeDistillationRepo:
@@ -215,6 +241,41 @@ class TestPipeline:
         refreshed = p.transcripts.get_by_id(t.id)
         assert refreshed.status == TranscriptStatus.done
         assert refreshed.raw_text == "fresh transcript text"
+
+    def test_retry_failed_deletes_transcript_after_tenth_failure(self):
+        class FailingArchive:
+            def fetch_page_transcript(self, identifier):
+                return ""
+
+        p = _pipeline()
+        p.archive = FailingArchive()
+        t = p.transcripts.add_failed("CNBC_20260702_220000_Mad_Money", attempts=9)
+
+        totals = p.retry_failed(delete_after_attempts=10)
+
+        assert totals["retried"] == 1
+        assert totals["failures"] == 1
+        assert totals["deleted"] == 1
+        assert p.transcripts.get_by_id(t.id) is None
+
+    def test_retry_failed_keeps_transcript_below_threshold(self):
+        class FailingArchive:
+            def fetch_page_transcript(self, identifier):
+                return ""
+
+        p = _pipeline()
+        p.archive = FailingArchive()
+        t = p.transcripts.add_failed("CNBC_20260702_220000_Mad_Money", attempts=8)
+
+        totals = p.retry_failed(delete_after_attempts=10)
+        refreshed = p.transcripts.get_by_id(t.id)
+
+        assert totals["retried"] == 1
+        assert totals["failures"] == 1
+        assert totals.get("deleted", 0) == 0
+        assert refreshed is not None
+        assert refreshed.status == TranscriptStatus.failed
+        assert refreshed.attempts == 9
 
 
 class TestWakeTiming:

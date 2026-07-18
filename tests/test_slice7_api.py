@@ -236,3 +236,17 @@ class TestReprocessEndpoints:
         assert fake.retry_kwargs == {
             "show": None, "from_date": None, "to_date": None, "max_attempts": None,
         }
+
+    def test_retry_failed_with_delete_after_attempts(self, app_client, monkeypatch):
+        fake = FakePipeline()
+        monkeypatch.setattr("app.services.ingest_worker.build_pipeline", lambda *a, **k: fake)
+        resp = app_client.post_json("/retry-failed", {"delete_after_attempts": 10})
+        assert resp.status_int == 202
+        self._await_job(app_client, resp)
+        assert fake.retry_kwargs == {
+            "show": None,
+            "from_date": None,
+            "to_date": None,
+            "max_attempts": None,
+            "delete_after_attempts": 10,
+        }

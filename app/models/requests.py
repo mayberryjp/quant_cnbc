@@ -38,4 +38,6 @@ class RetryFailedRequest(BaseModel):
     to_date: date | None = None
     # Only retry rows whose attempt count is still below this ceiling.
     max_attempts: int | None = None
+    # Delete rows that have reached this many failed attempts.
+    delete_after_attempts: int | None = None
 

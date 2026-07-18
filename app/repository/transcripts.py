@@ -157,12 +157,14 @@ class TranscriptRepository:
 
         Clears the fetched transcript text and every downstream stage marker so
         the next run re-fetches from archive.org and re-runs all passes.
+        Retry attempts are intentionally preserved so repeated failures can be
+        tracked over time.
         """
         sql = text(
             """
             UPDATE cnbc.transcripts
                SET status = 'discovered', raw_text = NULL, content_hash = NULL,
-                   caption_file = NULL, attempts = 0, last_error = NULL,
+                   caption_file = NULL, last_error = NULL,
                    fetched_at = NULL, distilled_at = NULL, delivered_at = NULL
              WHERE id = :id
             """

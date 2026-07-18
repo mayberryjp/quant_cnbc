@@ -6,7 +6,8 @@ Usage:
         [--reprocess <archive_identifier>]
         [--restart <archive_identifier>]
         [--restart-all [--show S] [--from-date D] [--to-date D]]
-        [--retry-failed [--show S] [--from-date D] [--to-date D] [--max-attempts N]]
+        [--retry-failed [--show S] [--from-date D] [--to-date D]
+            [--max-attempts N] [--delete-after-attempts N]]
         [--reprocess-stale [--show S] [--from-date D] [--to-date D]]
         [--force [--show S] [--from-date D] [--to-date D]]
 """
@@ -167,6 +168,11 @@ def run_worker(argv: list[str] | None = None) -> None:
         "--max-attempts", type=int, default=None,
         help="with --retry-failed, only retry rows whose attempts are below this ceiling",
     )
+    parser.add_argument(
+        "--delete-after-attempts", type=int,
+        default=settings.failed_retry_delete_attempts,
+        help="with --retry-failed, delete rows once failed attempts reach this threshold",
+    )
     parser.add_argument("--reprocess-stale", action="store_true")
     parser.add_argument(
         "--force", action="store_true",
@@ -201,6 +207,7 @@ def run_worker(argv: list[str] | None = None) -> None:
         totals = pipeline.retry_failed(
             show=args.show, from_date=args.from_date, to_date=args.to_date,
             max_attempts=args.max_attempts,
+            delete_after_attempts=args.delete_after_attempts,
         )
         logger.info("retry-failed complete: %s", dict(totals))
         return
@@ -236,7 +243,10 @@ def run_worker(argv: list[str] | None = None) -> None:
         now = datetime.now()
         if retry_due_at is not None and now >= retry_due_at:
             try:
-                retry_totals = pipeline.retry_failed(max_attempts=settings.max_attempts)
+                retry_totals = pipeline.retry_failed(
+                    max_attempts=None,
+                    delete_after_attempts=settings.failed_retry_delete_attempts,
+                )
                 logger.info("retry-failed sweep complete: %s", dict(retry_totals))
             except Exception:
                 logger.exception("retry-failed sweep failed")

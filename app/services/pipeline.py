@@ -205,7 +205,8 @@ class Pipeline:
 
     def retry_failed(
         self, *, show: str | None = None, from_date=None, to_date=None,
-        max_attempts: int | None = None, run_date: date | None = None,
+        max_attempts: int | None = None, delete_after_attempts: int | None = None,
+        run_date: date | None = None,
     ) -> Counter:
         """Re-run every transcript stuck in the 'failed' state.
 
@@ -219,10 +220,35 @@ class Pipeline:
         )
         log.info("retry-failed: %d failed transcript(s) to retry", len(candidates))
         totals: Counter = Counter()
+        retried = 0
         for i, t in enumerate(candidates, 1):
             log.info("retry-failed: [%d/%d] %s", i, len(candidates), t.archive_identifier)
+            if delete_after_attempts is not None and t.attempts >= delete_after_attempts:
+                if self.transcripts.delete(t.id):
+                    totals["deleted"] += 1
+                    log.warning(
+                        "retry-failed: deleted %s after %d attempts",
+                        t.archive_identifier,
+                        t.attempts,
+                    )
+                continue
+            retried += 1
             totals.update(self.restart(t, run_date=run_date))
-        totals["retried"] = len(candidates)
-        log.info("retry-failed: retried %d, totals=%s", len(candidates), dict(totals))
+            refreshed = self.transcripts.get_by_id(t.id)
+            if (
+                delete_after_attempts is not None
+                and refreshed is not None
+                and refreshed.status == TranscriptStatus.failed
+                and refreshed.attempts >= delete_after_attempts
+            ):
+                if self.transcripts.delete(refreshed.id):
+                    totals["deleted"] += 1
+                    log.warning(
+                        "retry-failed: deleted %s after %d attempts",
+                        refreshed.archive_identifier,
+                        refreshed.attempts,
+                    )
+        totals["retried"] = retried
+        log.info("retry-failed: retried %d, totals=%s", retried, dict(totals))
         return totals
 

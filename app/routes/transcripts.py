@@ -199,9 +199,16 @@ def retry_failed():
     from app.services.jobs import registry
 
     def _job():
+        kwargs = {
+            "show": body.show,
+            "from_date": body.from_date,
+            "to_date": body.to_date,
+            "max_attempts": body.max_attempts,
+        }
+        if body.delete_after_attempts is not None:
+            kwargs["delete_after_attempts"] = body.delete_after_attempts
         return build_pipeline().retry_failed(
-            show=body.show, from_date=body.from_date, to_date=body.to_date,
-            max_attempts=body.max_attempts,
+            **kwargs,
         )
 
     job = registry.submit("retry-failed", _job)
